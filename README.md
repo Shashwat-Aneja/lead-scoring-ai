@@ -1,20 +1,17 @@
 # Lead Scoring AI
 
-A machine learning model that predicts the probability of a lead converting into a customer using historical business data.  
-Useful for sales optimization and decision-making in business environments.
+A machine learning model that predicts the probability of a lead converting into a customer using historical business data.
 
----
+## Features
+- Logistic Regression binary classification
+- Conversion likelihood as a percentage from 0 to 100
+- Numeric validation for feature columns and conversion labels
+- Clear validation errors for missing, non-finite, or single-class training data
 
-## 📊 Features
-- Uses Logistic Regression for binary classification
-- Predicts conversion likelihood (0–100%)
-- Based on metrics like customer interaction, visits, and spend
-- Lightweight, business-friendly, and easily extendable
+## Input CSV
+The CSV must include these columns:
 
----
-
-## 🧪 Example CSV Format
-```
+```csv
 interaction_score,visits,total_spent,converted
 80,10,12000,1
 30,4,3000,0
@@ -23,44 +20,18 @@ interaction_score,visits,total_spent,converted
 90,12,20000,1
 ```
 
----
+The `converted` column must contain both labels, `0` and `1`. Feature values and labels must be numeric and finite.
 
-## 🚀 Usage
-
-### 1. Clone repo
-```bash
-git clone https://github.com/Shashwat-Aneja/lead-scoring-ai
-cd lead-scoring-ai
-```
-
-### 2. Install dependencies
+## Run
 ```bash
 pip install pandas scikit-learn
-```
-
-### 3. Run the script
-```bash
 python score_leads.py data.csv
 ```
 
----
+The output includes each lead's input features and predicted conversion probability. These are model estimates, not guarantees of an individual lead's behavior.
 
-## 📎 Project Structure
-```
-lead-scoring-ai/
-│
-├── score_leads.py
-└── README.md
-```
+## Project files
+- `score_leads.py`: validation, model training, and probability output
+- `test_score_leads.py`: regression tests for valid and invalid inputs
 
----
-
-## 🔧 Future Enhancements
-- Add more features (time since last contact, customer type)
-- Use more advanced models (XGBoost / Deep Learning)
-- Integration with business CRM systems
-- Export results to CSV / PDF
-
----
-
-Developed by **Shashwat Aneja**
+Developed by **Shashwat Aneja**.
