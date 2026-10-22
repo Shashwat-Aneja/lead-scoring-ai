@@ -39,5 +39,19 @@ class LeadScoringValidationTests(unittest.TestCase):
         self.assertIsNone(score_leads(path))
 
 
+    def test_priority_tier_boundaries(self):
+        from score_leads import priority_tier
+
+        self.assertEqual(priority_tier(39.99), "Low")
+        self.assertEqual(priority_tier(40), "Medium")
+        self.assertEqual(priority_tier(69.99), "Medium")
+        self.assertEqual(priority_tier(70), "High")
+
+    def test_priority_tier_rejects_out_of_range_probability(self):
+        from score_leads import priority_tier
+
+        with self.assertRaisesRegex(ValueError, "between 0 and 100"):
+            priority_tier(101)
+
 if __name__ == "__main__":
     unittest.main()
