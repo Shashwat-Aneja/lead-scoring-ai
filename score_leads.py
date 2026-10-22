@@ -8,6 +8,17 @@ FEATURE_COLUMNS = ["interaction_score", "visits", "total_spent"]
 REQUIRED_COLUMNS = set(FEATURE_COLUMNS + ["converted"])
 
 
+def priority_tier(probability):
+    """Map a model probability percentage to an explainable follow-up tier."""
+    if not np.isfinite(probability) or probability < 0 or probability > 100:
+        raise ValueError("Conversion probability must be between 0 and 100.")
+    if probability >= 70:
+        return "High"
+    if probability >= 40:
+        return "Medium"
+    return "Low"
+
+
 def score_leads(csv_file):
     try:
         df = pd.read_csv(csv_file)
@@ -33,7 +44,7 @@ def score_leads(csv_file):
         df["conversion_probability"] = model.predict_proba(df[FEATURE_COLUMNS])[:, positive_class_index] * 100
 
         print("\n===== Lead Conversion Scoring =====")
-        print(df[FEATURE_COLUMNS + ["conversion_probability"]].to_string(index=False))
+        print(df[FEATURE_COLUMNS + ["conversion_probability", "priority"]].to_string(index=False))
         print("===================================\n")
         return df
     except (OSError, pd.errors.ParserError, ValueError) as exc:
