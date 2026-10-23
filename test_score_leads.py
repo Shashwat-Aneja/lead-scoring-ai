@@ -24,6 +24,16 @@ class LeadScoringValidationTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertTrue(result["conversion_probability"].between(0, 100).all())
 
+    def test_scored_leads_include_valid_priority_tiers(self):
+        path = self.csv_path(
+            "interaction_score,visits,total_spent,converted\n"
+            "1,2,10,0\n2,4,20,0\n8,10,100,1\n9,12,150,1\n"
+        )
+        result = score_leads(path)
+        self.assertIsNotNone(result)
+        self.assertIn("priority", result.columns)
+        self.assertTrue(set(result["priority"]).issubset({"Low", "Medium", "High"}))
+
     def test_single_class_training_data_is_rejected(self):
         path = self.csv_path(
             "interaction_score,visits,total_spent,converted\n"
