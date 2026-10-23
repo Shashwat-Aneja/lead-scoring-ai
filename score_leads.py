@@ -42,6 +42,7 @@ def score_leads(csv_file):
         model.fit(df[FEATURE_COLUMNS], df["converted"].astype(int))
         positive_class_index = list(model.classes_).index(1)
         df["conversion_probability"] = model.predict_proba(df[FEATURE_COLUMNS])[:, positive_class_index] * 100
+        df["priority"] = df["conversion_probability"].apply(priority_tier)
 
         print("\n===== Lead Conversion Scoring =====")
         print(df[FEATURE_COLUMNS + ["conversion_probability", "priority"]].to_string(index=False))
