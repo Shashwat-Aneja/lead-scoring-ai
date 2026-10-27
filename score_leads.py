@@ -1,4 +1,4 @@
-import sys
+import argparse
 
 import numpy as np
 import pandas as pd
@@ -53,11 +53,26 @@ def score_leads(csv_file):
         return None
 
 
-def main():
-    if len(sys.argv) != 2:
-        print("Usage: python score_leads.py <csv_file>")
-        return 2
-    return 0 if score_leads(sys.argv[1]) is not None else 1
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Score leads from a CSV file.")
+    parser.add_argument("csv_file", help="CSV containing lead features and conversion labels")
+    parser.add_argument(
+        "--output",
+        "-o",
+        help="Optional destination CSV for scored leads, including probabilities and priority tiers",
+    )
+    args = parser.parse_args(argv)
+
+    result = score_leads(args.csv_file)
+    if result is None:
+        return 1
+    if args.output:
+        try:
+            result.to_csv(args.output, index=False)
+        except OSError as exc:
+            print(f"❌ Could not write scored leads: {exc}")
+            return 1
+    return 0
 
 
 if __name__ == "__main__":
