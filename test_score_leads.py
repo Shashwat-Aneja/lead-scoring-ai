@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from score_leads import score_leads
+from score_leads import main, score_leads
 
 
 class LeadScoringValidationTests(unittest.TestCase):
@@ -48,7 +48,6 @@ class LeadScoringValidationTests(unittest.TestCase):
         )
         self.assertIsNone(score_leads(path))
 
-
     def test_priority_tier_boundaries(self):
         from score_leads import priority_tier
 
@@ -62,6 +61,20 @@ class LeadScoringValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "between 0 and 100"):
             priority_tier(101)
+
+    def test_cli_exports_probabilities_and_priorities_to_csv(self):
+        source = self.csv_path(
+            "interaction_score,visits,total_spent,converted\n"
+            "1,2,10,0\n2,4,20,0\n8,10,100,1\n9,12,150,1\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "scored-leads.csv"
+            self.assertEqual(main([source, "--output", str(output)]), 0)
+            exported = pd.read_csv(output)
+            self.assertIn("conversion_probability", exported.columns)
+            self.assertIn("priority", exported.columns)
+            self.assertEqual(len(exported), 4)
+
 
 if __name__ == "__main__":
     unittest.main()
