@@ -6,21 +6,45 @@ from sklearn.linear_model import LogisticRegression
 
 FEATURE_COLUMNS = ["interaction_score", "visits", "total_spent"]
 REQUIRED_COLUMNS = set(FEATURE_COLUMNS + ["converted"])
+DEFAULT_MEDIUM_THRESHOLD = 40.0
+DEFAULT_HIGH_THRESHOLD = 70.0
 
 
-def priority_tier(probability):
+def validate_priority_thresholds(medium_threshold, high_threshold):
+    """Validate the ordered probability boundaries used for lead follow-up tiers."""
+    if (
+        not np.isfinite(medium_threshold)
+        or not np.isfinite(high_threshold)
+        or not 0 <= medium_threshold < high_threshold <= 100
+    ):
+        raise ValueError(
+            "Priority thresholds must satisfy 0 <= medium < high <= 100."
+        )
+
+
+def priority_tier(
+    probability,
+    medium_threshold=DEFAULT_MEDIUM_THRESHOLD,
+    high_threshold=DEFAULT_HIGH_THRESHOLD,
+):
     """Map a model probability percentage to an explainable follow-up tier."""
+    validate_priority_thresholds(medium_threshold, high_threshold)
     if not np.isfinite(probability) or probability < 0 or probability > 100:
         raise ValueError("Conversion probability must be between 0 and 100.")
-    if probability >= 70:
+    if probability >= high_threshold:
         return "High"
-    if probability >= 40:
+    if probability >= medium_threshold:
         return "Medium"
     return "Low"
 
 
-def score_leads(csv_file):
+def score_leads(
+    csv_file,
+    medium_threshold=DEFAULT_MEDIUM_THRESHOLD,
+    high_threshold=DEFAULT_HIGH_THRESHOLD,
+):
     try:
+        validate_priority_thresholds(medium_threshold, high_threshold)
         df = pd.read_csv(csv_file)
         missing = REQUIRED_COLUMNS.difference(df.columns)
         if missing:
@@ -42,7 +66,11 @@ def score_leads(csv_file):
         model.fit(df[FEATURE_COLUMNS], df["converted"].astype(int))
         positive_class_index = list(model.classes_).index(1)
         df["conversion_probability"] = model.predict_proba(df[FEATURE_COLUMNS])[:, positive_class_index] * 100
-        df["priority"] = df["conversion_probability"].apply(priority_tier)
+        df["priority"] = df["conversion_probability"].apply(
+            lambda probability: priority_tier(
+                probability, medium_threshold=medium_threshold, high_threshold=high_threshold
+            )
+        )
 
         print("\n===== Lead Conversion Scoring =====")
         print(df[FEATURE_COLUMNS + ["conversion_probability", "priority"]].to_string(index=False))
@@ -61,9 +89,29 @@ def main(argv=None):
         "-o",
         help="Optional destination CSV for scored leads, including probabilities and priority tiers",
     )
+    parser.add_argument(
+        "--medium-threshold",
+        type=float,
+        default=DEFAULT_MEDIUM_THRESHOLD,
+        help="Minimum conversion probability for Medium priority (default: 40)",
+    )
+    parser.add_argument(
+        "--high-threshold",
+        type=float,
+        default=DEFAULT_HIGH_THRESHOLD,
+        help="Minimum conversion probability for High priority (default: 70)",
+    )
     args = parser.parse_args(argv)
+    try:
+        validate_priority_thresholds(args.medium_threshold, args.high_threshold)
+    except ValueError as exc:
+        parser.error(str(exc))
 
-    result = score_leads(args.csv_file)
+    result = score_leads(
+        args.csv_file,
+        medium_threshold=args.medium_threshold,
+        high_threshold=args.high_threshold,
+    )
     if result is None:
         return 1
     if args.output:
