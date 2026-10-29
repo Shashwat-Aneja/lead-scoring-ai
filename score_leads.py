@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -114,9 +115,15 @@ def main(argv=None):
     )
     if result is None:
         return 1
-    if args.output:
+    source_path = Path(args.csv_file).expanduser().resolve()
+    output_path = Path(args.output).expanduser().resolve() if args.output else None
+    if output_path is not None and output_path == source_path:
+        print("❌ Output CSV must be different from the source file.")
+        return 1
+    if output_path is not None:
         try:
-            result.to_csv(args.output, index=False)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            result.to_csv(output_path, index=False)
         except OSError as exc:
             print(f"❌ Could not write scored leads: {exc}")
             return 1
