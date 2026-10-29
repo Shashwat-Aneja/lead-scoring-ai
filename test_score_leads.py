@@ -62,6 +62,23 @@ class LeadScoringValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "between 0 and 100"):
             priority_tier(101)
 
+    def test_cli_refuses_to_overwrite_source_csv(self):
+        source = self.csv_path(
+            "interaction_score,visits,total_spent,converted\n"
+            "1,2,10,0\n2,4,20,0\n8,10,100,1\n9,12,150,1\n"
+        )
+        original = Path(source).read_bytes()
+
+        from contextlib import redirect_stdout
+        from io import StringIO
+        output = StringIO()
+        with redirect_stdout(output):
+            result = main([source, "--output", source])
+
+        self.assertEqual(result, 1)
+        self.assertEqual(Path(source).read_bytes(), original)
+        self.assertIn("different from the source file", output.getvalue())
+
     def test_cli_exports_probabilities_and_priorities_to_csv(self):
         source = self.csv_path(
             "interaction_score,visits,total_spent,converted\n"
