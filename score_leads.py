@@ -58,6 +58,10 @@ def score_leads(
             raise ValueError("Lead features and conversion labels must be numeric and non-empty.")
         if not np.isfinite(df[FEATURE_COLUMNS + ["converted"]].to_numpy(dtype=float)).all():
             raise ValueError("Lead features and conversion labels must be finite numbers.")
+        if (df["visits"] < 0).any() or not np.equal(
+            df["visits"], np.floor(df["visits"])
+        ).all():
+            raise ValueError("Lead visit counts must be non-negative whole numbers.")
         if not set(df["converted"].unique()).issubset({0, 1}):
             raise ValueError("'converted' must contain only 0 or 1.")
         if df["converted"].nunique() != 2:
