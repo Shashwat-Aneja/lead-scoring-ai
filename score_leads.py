@@ -121,9 +121,17 @@ def main(argv=None):
         return 1
     source_path = Path(args.csv_file).expanduser().resolve()
     output_path = Path(args.output).expanduser().resolve() if args.output else None
-    if output_path is not None and output_path == source_path:
-        print("❌ Output CSV must be different from the source file.")
-        return 1
+    if output_path is not None:
+        same_file = output_path == source_path
+        if not same_file and output_path.exists():
+            try:
+                same_file = output_path.samefile(source_path)
+            except OSError:
+                # Do not replace a file whose identity cannot be checked.
+                same_file = True
+        if same_file:
+            print("❌ Output CSV must be different from the source file.")
+            return 1
     if output_path is not None:
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
