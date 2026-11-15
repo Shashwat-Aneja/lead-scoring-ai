@@ -106,6 +106,13 @@ class LeadScoringValidationTests(unittest.TestCase):
         )
         self.assertIsNone(score_leads(path))
 
+    def test_negative_interaction_scores_are_rejected(self):
+        path = self.csv_path(
+            "interaction_score,visits,total_spent,converted\n"
+            "-1,2,10,0\n2,4,20,0\n8,10,100,1\n9,12,150,1\n"
+        )
+        self.assertIsNone(score_leads(path))
+
     def test_fractional_visit_counts_are_rejected(self):
         path = self.csv_path(
             "interaction_score,visits,total_spent,converted\n"
