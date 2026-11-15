@@ -62,6 +62,10 @@ def score_leads(
             df["visits"], np.floor(df["visits"])
         ).all():
             raise ValueError("Lead visit counts must be non-negative whole numbers.")
+        if (df["interaction_score"] < 0).any():
+            raise ValueError("Lead interaction_score must be non-negative.")
+        if (df["total_spent"] < 0).any():
+            raise ValueError("Lead total_spent must be non-negative.")
         if not set(df["converted"].unique()).issubset({0, 1}):
             raise ValueError("'converted' must contain only 0 or 1.")
         if df["converted"].nunique() != 2:
