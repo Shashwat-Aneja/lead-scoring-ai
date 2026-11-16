@@ -1,4 +1,6 @@
 import argparse
+import os
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -90,6 +92,24 @@ def score_leads(
         return None
 
 
+def export_scored_leads(result, output_path):
+    """Replace an existing report only after a complete export is written."""
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="", delete=False,
+            dir=output_path.parent, prefix=f".{output_path.name}.", suffix=".tmp",
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            result.to_csv(temporary_file, index=False)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, output_path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Score leads from a CSV file.")
     parser.add_argument("csv_file", help="CSV containing lead features and conversion labels")
@@ -139,7 +159,7 @@ def main(argv=None):
     if output_path is not None:
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            result.to_csv(output_path, index=False)
+            export_scored_leads(result, output_path)
         except OSError as exc:
             print(f"❌ Could not write scored leads: {exc}")
             return 1
