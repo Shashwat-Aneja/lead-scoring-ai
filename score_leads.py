@@ -2,6 +2,7 @@ import argparse
 import os
 import tempfile
 from pathlib import Path
+from numbers import Real
 
 import numpy as np
 import pandas as pd
@@ -16,7 +17,11 @@ DEFAULT_HIGH_THRESHOLD = 70.0
 def validate_priority_thresholds(medium_threshold, high_threshold):
     """Validate the ordered probability boundaries used for lead follow-up tiers."""
     if (
-        not np.isfinite(medium_threshold)
+        isinstance(medium_threshold, (bool, np.bool_))
+        or isinstance(high_threshold, (bool, np.bool_))
+        or not isinstance(medium_threshold, Real)
+        or not isinstance(high_threshold, Real)
+        or not np.isfinite(medium_threshold)
         or not np.isfinite(high_threshold)
         or not 0 <= medium_threshold < high_threshold <= 100
     ):
@@ -32,7 +37,8 @@ def priority_tier(
 ):
     """Map a model probability percentage to an explainable follow-up tier."""
     validate_priority_thresholds(medium_threshold, high_threshold)
-    if not np.isfinite(probability) or probability < 0 or probability > 100:
+    if (isinstance(probability, (bool, np.bool_)) or not isinstance(probability, Real)
+            or not np.isfinite(probability) or probability < 0 or probability > 100):
         raise ValueError("Conversion probability must be between 0 and 100.")
     if probability >= high_threshold:
         return "High"
