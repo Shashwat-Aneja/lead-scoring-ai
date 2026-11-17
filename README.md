@@ -35,3 +35,5 @@ The output includes each lead's input features and predicted conversion probabil
 - `test_score_leads.py`: regression tests for valid and invalid inputs
 
 Developed by **Shashwat Aneja**.
+
+Lead features are standardized inside the fitted model pipeline. Currency unit changes no longer dominate the model solely through their numeric scale.

@@ -7,6 +7,8 @@ from numbers import Real
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 FEATURE_COLUMNS = ["interaction_score", "visits", "total_spent"]
 REQUIRED_COLUMNS = set(FEATURE_COLUMNS + ["converted"])
@@ -79,7 +81,7 @@ def score_leads(
         if df["converted"].nunique() != 2:
             raise ValueError("Training data must contain both converted and non-converted leads.")
 
-        model = LogisticRegression()
+        model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
         model.fit(df[FEATURE_COLUMNS], df["converted"].astype(int))
         positive_class_index = list(model.classes_).index(1)
         df["conversion_probability"] = model.predict_proba(df[FEATURE_COLUMNS])[:, positive_class_index] * 100
