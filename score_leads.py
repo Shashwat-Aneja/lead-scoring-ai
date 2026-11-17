@@ -53,6 +53,7 @@ def score_leads(
     csv_file,
     medium_threshold=DEFAULT_MEDIUM_THRESHOLD,
     high_threshold=DEFAULT_HIGH_THRESHOLD,
+    scoring_file=None,
 ):
     try:
         validate_priority_thresholds(medium_threshold, high_threshold)
@@ -83,6 +84,18 @@ def score_leads(
 
         model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
         model.fit(df[FEATURE_COLUMNS], df["converted"].astype(int))
+        if scoring_file is not None:
+            candidates = pd.read_csv(scoring_file)
+            missing = set(FEATURE_COLUMNS).difference(candidates.columns)
+            if missing:
+                raise ValueError(f"Scoring CSV must include: {', '.join(sorted(missing))}")
+            for column in FEATURE_COLUMNS:
+                candidates[column] = pd.to_numeric(candidates[column], errors="coerce")
+            if candidates.empty or not np.isfinite(candidates[FEATURE_COLUMNS].to_numpy(dtype=float)).all():
+                raise ValueError("Scoring features must be non-empty finite numbers.")
+            if (candidates[FEATURE_COLUMNS] < 0).any().any() or not np.equal(candidates["visits"], np.floor(candidates["visits"])).all():
+                raise ValueError("Scoring features must be non-negative and visits must be whole numbers.")
+            df = candidates.copy()
         positive_class_index = list(model.classes_).index(1)
         df["conversion_probability"] = model.predict_proba(df[FEATURE_COLUMNS])[:, positive_class_index] * 100
         df["priority"] = df["conversion_probability"].apply(
@@ -138,16 +151,19 @@ def main(argv=None):
         default=DEFAULT_HIGH_THRESHOLD,
         help="Minimum conversion probability for High priority (default: 70)",
     )
+    parser.add_argument("--score-csv", help="Separate unlabeled lead CSV to score using the training CSV")
     args = parser.parse_args(argv)
     try:
         validate_priority_thresholds(args.medium_threshold, args.high_threshold)
     except ValueError as exc:
         parser.error(str(exc))
 
+    scoring_options = {"scoring_file": args.score_csv} if args.score_csv else {}
     result = score_leads(
         args.csv_file,
         medium_threshold=args.medium_threshold,
         high_threshold=args.high_threshold,
+        **scoring_options,
     )
     if result is None:
         return 1
@@ -155,6 +171,11 @@ def main(argv=None):
     output_path = Path(args.output).expanduser().resolve() if args.output else None
     if output_path is not None:
         same_file = output_path == source_path
+        if args.score_csv:
+            scoring_path = Path(args.score_csv).expanduser().resolve()
+            same_file = same_file or output_path == scoring_path
+            if output_path.exists() and scoring_path.exists():
+                same_file = same_file or output_path.samefile(scoring_path)
         if not same_file and output_path.exists():
             try:
                 same_file = output_path.samefile(source_path)
