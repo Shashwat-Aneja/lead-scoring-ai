@@ -54,9 +54,12 @@ def score_leads(
     medium_threshold=DEFAULT_MEDIUM_THRESHOLD,
     high_threshold=DEFAULT_HIGH_THRESHOLD,
     scoring_file=None,
+    max_display_rows=20,
 ):
     try:
         validate_priority_thresholds(medium_threshold, high_threshold)
+        if not isinstance(max_display_rows, int) or isinstance(max_display_rows, bool) or max_display_rows < 1:
+            raise ValueError("max_display_rows must be a positive integer.")
         df = pd.read_csv(csv_file)
         missing = REQUIRED_COLUMNS.difference(df.columns)
         if missing:
@@ -105,7 +108,9 @@ def score_leads(
         )
 
         print("\n===== Lead Conversion Scoring =====")
-        print(df[FEATURE_COLUMNS + ["conversion_probability", "priority"]].to_string(index=False))
+        print(df[FEATURE_COLUMNS + ["conversion_probability", "priority"]].head(max_display_rows).to_string(index=False))
+        if len(df) > max_display_rows:
+            print(f"Showing {max_display_rows} of {len(df)} leads; exports include every scored lead.")
         print("===================================\n")
         return df
     except (OSError, pd.errors.ParserError, ValueError) as exc:
@@ -152,6 +157,7 @@ def main(argv=None):
         help="Minimum conversion probability for High priority (default: 70)",
     )
     parser.add_argument("--score-csv", help="Separate unlabeled lead CSV to score using the training CSV")
+    parser.add_argument("--max-display-rows", type=int, default=20, help="Maximum lead rows printed; output CSV remains complete")
     args = parser.parse_args(argv)
     try:
         validate_priority_thresholds(args.medium_threshold, args.high_threshold)
@@ -159,6 +165,7 @@ def main(argv=None):
         parser.error(str(exc))
 
     scoring_options = {"scoring_file": args.score_csv} if args.score_csv else {}
+    scoring_options["max_display_rows"] = args.max_display_rows
     result = score_leads(
         args.csv_file,
         medium_threshold=args.medium_threshold,
