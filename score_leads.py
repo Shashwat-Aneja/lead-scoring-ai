@@ -164,6 +164,29 @@ def main(argv=None):
     except ValueError as exc:
         parser.error(str(exc))
 
+    try:
+        source_path = Path(args.csv_file).expanduser().resolve()
+        output_path = Path(args.output).expanduser().resolve() if args.output else None
+        if output_path is not None:
+            same_file = output_path == source_path
+            if args.score_csv:
+                scoring_path = Path(args.score_csv).expanduser().resolve()
+                same_file = same_file or output_path == scoring_path
+                if output_path.exists() and scoring_path.exists():
+                    same_file = same_file or output_path.samefile(scoring_path)
+            if not same_file and output_path.exists():
+                try:
+                    same_file = output_path.samefile(source_path)
+                except OSError:
+                    # Do not replace a file whose identity cannot be checked.
+                    same_file = True
+            if same_file:
+                print("❌ Output CSV must be different from the source file.")
+                return 1
+    except OSError as exc:
+        print(f"❌ Could not validate output path: {exc}")
+        return 1
+
     scoring_options = {"scoring_file": args.score_csv} if args.score_csv else {}
     scoring_options["max_display_rows"] = args.max_display_rows
     result = score_leads(
@@ -174,24 +197,6 @@ def main(argv=None):
     )
     if result is None:
         return 1
-    source_path = Path(args.csv_file).expanduser().resolve()
-    output_path = Path(args.output).expanduser().resolve() if args.output else None
-    if output_path is not None:
-        same_file = output_path == source_path
-        if args.score_csv:
-            scoring_path = Path(args.score_csv).expanduser().resolve()
-            same_file = same_file or output_path == scoring_path
-            if output_path.exists() and scoring_path.exists():
-                same_file = same_file or output_path.samefile(scoring_path)
-        if not same_file and output_path.exists():
-            try:
-                same_file = output_path.samefile(source_path)
-            except OSError:
-                # Do not replace a file whose identity cannot be checked.
-                same_file = True
-        if same_file:
-            print("❌ Output CSV must be different from the source file.")
-            return 1
     if output_path is not None:
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
