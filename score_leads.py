@@ -66,6 +66,8 @@ def score_leads(
             raise ValueError(f"CSV must include: {', '.join(sorted(missing))}")
 
         df = df.copy()
+        if df[FEATURE_COLUMNS].apply(lambda column: column.map(lambda value: isinstance(value, (bool, np.bool_)))).any().any():
+            raise ValueError("Lead features must be numeric, not booleans.")
         for column in FEATURE_COLUMNS + ["converted"]:
             df[column] = pd.to_numeric(df[column], errors="coerce")
         if df.empty or df[FEATURE_COLUMNS + ["converted"]].isna().any().any():
@@ -92,6 +94,8 @@ def score_leads(
             missing = set(FEATURE_COLUMNS).difference(candidates.columns)
             if missing:
                 raise ValueError(f"Scoring CSV must include: {', '.join(sorted(missing))}")
+            if candidates[FEATURE_COLUMNS].apply(lambda column: column.map(lambda value: isinstance(value, (bool, np.bool_)))).any().any():
+                raise ValueError("Scoring features must be numeric, not booleans.")
             for column in FEATURE_COLUMNS:
                 candidates[column] = pd.to_numeric(candidates[column], errors="coerce")
             if candidates.empty or not np.isfinite(candidates[FEATURE_COLUMNS].to_numpy(dtype=float)).all():
