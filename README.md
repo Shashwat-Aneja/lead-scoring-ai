@@ -39,3 +39,9 @@ Developed by **Shashwat Aneja**.
 Lead features are standardized inside the fitted model pipeline. Currency unit changes no longer dominate the model solely through their numeric scale.
 
 Use `TRAIN.csv --score-csv NEW_LEADS.csv --output scored.csv` to fit on labeled history and score separate unlabeled leads. Outputs cannot overwrite either input. Without `--score-csv`, reported probabilities describe the training rows and are not out-of-sample accuracy measurements.
+
+Use `--max-display-rows` to control the console preview (default 20). Every scored lead is retained in returned data and CSV exports.
+
+Export paths are validated before model fitting. Input aliases and inaccessible file identities fail early rather than training a model that cannot be safely exported.
+
+Boolean feature values are rejected in training and candidate CSVs instead of silently treating true/false as money, visits or interaction scores. Binary conversion labels remain supported.
