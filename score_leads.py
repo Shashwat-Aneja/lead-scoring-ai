@@ -55,6 +55,7 @@ def score_leads(
     high_threshold=DEFAULT_HIGH_THRESHOLD,
     scoring_file=None,
     max_display_rows=20,
+    sort_by_probability=False,
 ):
     try:
         validate_priority_thresholds(medium_threshold, high_threshold)
@@ -113,6 +114,9 @@ def score_leads(
             )
         )
 
+        if sort_by_probability:
+            df = df.sort_values("conversion_probability", ascending=False, kind="stable")
+
         print("\n===== Lead Conversion Scoring =====")
         print(df[FEATURE_COLUMNS + ["conversion_probability", "priority"]].head(max_display_rows).to_string(index=False))
         if len(df) > max_display_rows:
@@ -164,6 +168,7 @@ def main(argv=None):
     )
     parser.add_argument("--score-csv", help="Separate unlabeled lead CSV to score using the training CSV")
     parser.add_argument("--max-display-rows", type=int, default=20, help="Maximum lead rows printed; output CSV remains complete")
+    parser.add_argument("--sort-by-probability", action="store_true", help="Rank leads from highest conversion probability, keeping ties stable")
     args = parser.parse_args(argv)
     try:
         validate_priority_thresholds(args.medium_threshold, args.high_threshold)
@@ -195,6 +200,8 @@ def main(argv=None):
 
     scoring_options = {"scoring_file": args.score_csv} if args.score_csv else {}
     scoring_options["max_display_rows"] = args.max_display_rows
+    if args.sort_by_probability:
+        scoring_options["sort_by_probability"] = True
     result = score_leads(
         args.csv_file,
         medium_threshold=args.medium_threshold,
