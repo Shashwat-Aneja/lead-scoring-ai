@@ -45,3 +45,5 @@ Use `--max-display-rows` to control the console preview (default 20). Every scor
 Export paths are validated before model fitting. Input aliases and inaccessible file identities fail early rather than training a model that cannot be safely exported.
 
 Boolean feature values are rejected in training and candidate CSVs instead of silently treating true/false as money, visits or interaction scores. Binary conversion labels remain supported.
+
+Use `--sort-by-probability` to rank the preview and complete export by descending conversion probability. Equal scores retain their input order.

@@ -55,6 +55,7 @@ def score_leads(
     high_threshold=DEFAULT_HIGH_THRESHOLD,
     scoring_file=None,
     max_display_rows=20,
+    sort_by_probability=False,
 ):
     try:
         validate_priority_thresholds(medium_threshold, high_threshold)
@@ -88,7 +89,8 @@ def score_leads(
             raise ValueError("Training data must contain both converted and non-converted leads.")
 
         model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
-        model.fit(df[FEATURE_COLUMNS], df["converted"].astype(int))
+        training_features = df[FEATURE_COLUMNS].copy()
+        training_labels = df["converted"].astype(int).copy()
         if scoring_file is not None:
             candidates = pd.read_csv(scoring_file)
             missing = set(FEATURE_COLUMNS).difference(candidates.columns)
@@ -103,6 +105,7 @@ def score_leads(
             if (candidates[FEATURE_COLUMNS] < 0).any().any() or not np.equal(candidates["visits"], np.floor(candidates["visits"])).all():
                 raise ValueError("Scoring features must be non-negative and visits must be whole numbers.")
             df = candidates.copy()
+        model.fit(training_features, training_labels)
         positive_class_index = list(model.classes_).index(1)
         df["conversion_probability"] = model.predict_proba(df[FEATURE_COLUMNS])[:, positive_class_index] * 100
         df["priority"] = df["conversion_probability"].apply(
@@ -110,6 +113,9 @@ def score_leads(
                 probability, medium_threshold=medium_threshold, high_threshold=high_threshold
             )
         )
+
+        if sort_by_probability:
+            df = df.sort_values("conversion_probability", ascending=False, kind="stable")
 
         print("\n===== Lead Conversion Scoring =====")
         print(df[FEATURE_COLUMNS + ["conversion_probability", "priority"]].head(max_display_rows).to_string(index=False))
@@ -162,6 +168,7 @@ def main(argv=None):
     )
     parser.add_argument("--score-csv", help="Separate unlabeled lead CSV to score using the training CSV")
     parser.add_argument("--max-display-rows", type=int, default=20, help="Maximum lead rows printed; output CSV remains complete")
+    parser.add_argument("--sort-by-probability", action="store_true", help="Rank leads from highest conversion probability, keeping ties stable")
     args = parser.parse_args(argv)
     try:
         validate_priority_thresholds(args.medium_threshold, args.high_threshold)
@@ -193,6 +200,8 @@ def main(argv=None):
 
     scoring_options = {"scoring_file": args.score_csv} if args.score_csv else {}
     scoring_options["max_display_rows"] = args.max_display_rows
+    if args.sort_by_probability:
+        scoring_options["sort_by_probability"] = True
     result = score_leads(
         args.csv_file,
         medium_threshold=args.medium_threshold,
