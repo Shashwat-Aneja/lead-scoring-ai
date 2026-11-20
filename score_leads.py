@@ -1,5 +1,6 @@
 import csv
 import argparse
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -158,6 +159,24 @@ def export_scored_leads(result, output_path):
             temporary_path.unlink(missing_ok=True)
 
 
+def export_lead_summary(result, output_path):
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"lead_count": len(result), "priority_counts": {tier: int((result["priority"] == tier).sum()) for tier in ("High", "Medium", "Low")},
+               "average_conversion_probability": float(result["conversion_probability"].mean())}
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output_path.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+            json.dump(payload, handle, allow_nan=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, output_path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Score leads from a CSV file.")
     parser.add_argument("csv_file", help="CSV containing lead features and conversion labels")
@@ -181,6 +200,7 @@ def main(argv=None):
     parser.add_argument("--score-csv", help="Separate unlabeled lead CSV to score using the training CSV")
     parser.add_argument("--max-display-rows", type=int, default=20, help="Maximum lead rows printed; output CSV remains complete")
     parser.add_argument("--sort-by-probability", action="store_true", help="Rank leads from highest conversion probability, keeping ties stable")
+    parser.add_argument("--summary-output", help="Atomically export JSON lead counts, priority totals and mean conversion probability")
     args = parser.parse_args(argv)
     try:
         validate_priority_thresholds(args.medium_threshold, args.high_threshold)
@@ -190,6 +210,12 @@ def main(argv=None):
     try:
         source_path = Path(args.csv_file).expanduser().resolve()
         output_path = Path(args.output).expanduser().resolve() if args.output else None
+        summary_path = Path(args.summary_output).expanduser().resolve() if args.summary_output else None
+        if summary_path is not None:
+            protected = [source_path] + ([output_path] if output_path is not None else []) + ([Path(args.score_csv).expanduser().resolve()] if args.score_csv else [])
+            if any(summary_path == other or (summary_path.exists() and other.exists() and summary_path.samefile(other)) for other in protected):
+                print("❌ Summary destination must differ from every input and scored CSV export.")
+                return 1
         if output_path is not None:
             same_file = output_path == source_path
             if args.score_csv:
@@ -228,6 +254,12 @@ def main(argv=None):
             export_scored_leads(result, output_path)
         except OSError as exc:
             print(f"❌ Could not write scored leads: {exc}")
+            return 1
+    if summary_path is not None:
+        try:
+            export_lead_summary(result, summary_path)
+        except (OSError, ValueError) as exc:
+            print(f"❌ Could not export lead summary: {exc}")
             return 1
     return 0
 
