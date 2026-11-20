@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MaxAbsScaler
 
 FEATURE_COLUMNS = ["interaction_score", "visits", "total_spent"]
 REQUIRED_COLUMNS = set(FEATURE_COLUMNS + ["converted"])
@@ -99,7 +99,7 @@ def score_leads(
         if df["converted"].nunique() != 2:
             raise ValueError("Training data must contain both converted and non-converted leads.")
 
-        model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
+        model = make_pipeline(MaxAbsScaler(), StandardScaler(), LogisticRegression(max_iter=1000))
         training_features = df[FEATURE_COLUMNS].copy()
         training_labels = df["converted"].astype(int).copy()
         if scoring_file is not None:
