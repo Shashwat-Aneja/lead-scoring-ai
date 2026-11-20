@@ -1,4 +1,6 @@
+import csv
 import argparse
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -8,12 +10,21 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MaxAbsScaler
 
 FEATURE_COLUMNS = ["interaction_score", "visits", "total_spent"]
 REQUIRED_COLUMNS = set(FEATURE_COLUMNS + ["converted"])
 DEFAULT_MEDIUM_THRESHOLD = 40.0
 DEFAULT_HIGH_THRESHOLD = 70.0
+
+
+def _reject_duplicate_headers(csv_file):
+    """Do not let pandas silently rename ambiguous source CSV columns."""
+    if isinstance(csv_file, (str, os.PathLike)) and Path(csv_file).is_file():
+        with open(csv_file, encoding="utf-8-sig", newline="") as source:
+            headers = next(csv.reader(source), [])
+        if len(headers) != len(set(headers)):
+            raise ValueError("CSV column names must be unique; duplicate headers are ambiguous.")
 
 
 def validate_priority_thresholds(medium_threshold, high_threshold):
@@ -62,6 +73,7 @@ def score_leads(
         if not isinstance(max_display_rows, int) or isinstance(max_display_rows, bool) or max_display_rows < 1:
             raise ValueError("max_display_rows must be a positive integer.")
         df = pd.read_csv(csv_file)
+        _reject_duplicate_headers(csv_file)
         missing = REQUIRED_COLUMNS.difference(df.columns)
         if missing:
             raise ValueError(f"CSV must include: {', '.join(sorted(missing))}")
@@ -88,11 +100,12 @@ def score_leads(
         if df["converted"].nunique() != 2:
             raise ValueError("Training data must contain both converted and non-converted leads.")
 
-        model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
+        model = make_pipeline(MaxAbsScaler(), StandardScaler(), LogisticRegression(max_iter=1000))
         training_features = df[FEATURE_COLUMNS].copy()
         training_labels = df["converted"].astype(int).copy()
         if scoring_file is not None:
             candidates = pd.read_csv(scoring_file)
+            _reject_duplicate_headers(scoring_file)
             missing = set(FEATURE_COLUMNS).difference(candidates.columns)
             if missing:
                 raise ValueError(f"Scoring CSV must include: {', '.join(sorted(missing))}")
@@ -146,6 +159,24 @@ def export_scored_leads(result, output_path):
             temporary_path.unlink(missing_ok=True)
 
 
+def export_lead_summary(result, output_path):
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"lead_count": len(result), "priority_counts": {tier: int((result["priority"] == tier).sum()) for tier in ("High", "Medium", "Low")},
+               "average_conversion_probability": float(result["conversion_probability"].mean())}
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output_path.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+            json.dump(payload, handle, allow_nan=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, output_path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Score leads from a CSV file.")
     parser.add_argument("csv_file", help="CSV containing lead features and conversion labels")
@@ -169,6 +200,7 @@ def main(argv=None):
     parser.add_argument("--score-csv", help="Separate unlabeled lead CSV to score using the training CSV")
     parser.add_argument("--max-display-rows", type=int, default=20, help="Maximum lead rows printed; output CSV remains complete")
     parser.add_argument("--sort-by-probability", action="store_true", help="Rank leads from highest conversion probability, keeping ties stable")
+    parser.add_argument("--summary-output", help="Atomically export JSON lead counts, priority totals and mean conversion probability")
     args = parser.parse_args(argv)
     try:
         validate_priority_thresholds(args.medium_threshold, args.high_threshold)
@@ -178,6 +210,12 @@ def main(argv=None):
     try:
         source_path = Path(args.csv_file).expanduser().resolve()
         output_path = Path(args.output).expanduser().resolve() if args.output else None
+        summary_path = Path(args.summary_output).expanduser().resolve() if args.summary_output else None
+        if summary_path is not None:
+            protected = [source_path] + ([output_path] if output_path is not None else []) + ([Path(args.score_csv).expanduser().resolve()] if args.score_csv else [])
+            if any(summary_path == other or (summary_path.exists() and other.exists() and summary_path.samefile(other)) for other in protected):
+                print("❌ Summary destination must differ from every input and scored CSV export.")
+                return 1
         if output_path is not None:
             same_file = output_path == source_path
             if args.score_csv:
@@ -216,6 +254,12 @@ def main(argv=None):
             export_scored_leads(result, output_path)
         except OSError as exc:
             print(f"❌ Could not write scored leads: {exc}")
+            return 1
+    if summary_path is not None:
+        try:
+            export_lead_summary(result, summary_path)
+        except (OSError, ValueError) as exc:
+            print(f"❌ Could not export lead summary: {exc}")
             return 1
     return 0
 
