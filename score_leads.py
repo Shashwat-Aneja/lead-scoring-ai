@@ -18,6 +18,15 @@ DEFAULT_MEDIUM_THRESHOLD = 40.0
 DEFAULT_HIGH_THRESHOLD = 70.0
 
 
+def escape_csv_formulas(frame):
+    """Escape formula-like text in a copy; leave numeric cells unchanged."""
+    def escape(value):
+        if isinstance(value, str) and value.lstrip(" \t\r\n").startswith(("=", "+", "-", "@")):
+            return "'" + value
+        return value
+    return frame.apply(lambda column: column.map(escape))
+
+
 def _reject_duplicate_headers(csv_file):
     """Do not let pandas silently rename ambiguous source CSV columns."""
     if isinstance(csv_file, (str, os.PathLike)) and Path(csv_file).is_file():
@@ -141,7 +150,7 @@ def score_leads(
         return None
 
 
-def export_scored_leads(result, output_path):
+def export_scored_leads(result, output_path, escape_formulas=False):
     """Replace an existing report only after a complete export is written."""
     temporary_path = None
     try:
@@ -150,7 +159,8 @@ def export_scored_leads(result, output_path):
             dir=output_path.parent, prefix=f".{output_path.name}.", suffix=".tmp",
         ) as temporary_file:
             temporary_path = Path(temporary_file.name)
-            result.to_csv(temporary_file, index=False)
+            export = escape_csv_formulas(result) if escape_formulas else result
+            export.to_csv(temporary_file, index=False)
             temporary_file.flush()
             os.fsync(temporary_file.fileno())
         os.replace(temporary_path, output_path)
@@ -201,6 +211,7 @@ def main(argv=None):
     parser.add_argument("--max-display-rows", type=int, default=20, help="Maximum lead rows printed; output CSV remains complete")
     parser.add_argument("--sort-by-probability", action="store_true", help="Rank leads from highest conversion probability, keeping ties stable")
     parser.add_argument("--summary-output", help="Atomically export JSON lead counts, priority totals and mean conversion probability")
+    parser.add_argument("--escape-formulas", action="store_true", help="Prefix formula-like text with an apostrophe in CSV exports; calculations remain unchanged")
     args = parser.parse_args(argv)
     try:
         validate_priority_thresholds(args.medium_threshold, args.high_threshold)
@@ -251,7 +262,7 @@ def main(argv=None):
     if output_path is not None:
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            export_scored_leads(result, output_path)
+            export_scored_leads(result, output_path, **({"escape_formulas": True} if args.escape_formulas else {}))
         except OSError as exc:
             print(f"❌ Could not write scored leads: {exc}")
             return 1

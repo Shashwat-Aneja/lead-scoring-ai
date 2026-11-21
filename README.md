@@ -49,3 +49,5 @@ Boolean feature values are rejected in training and candidate CSVs instead of si
 Use `--sort-by-probability` to rank the preview and complete export by descending conversion probability. Equal scores retain their input order.
 
 `--summary-output summary.json` atomically exports the scored lead count, all three priority counts and mean conversion probability. It cannot alias training/scoring inputs or the scored CSV output. The mean is a model estimate, not a calibrated accuracy metric.
+
+Use `--escape-formulas` when CSV exports will be opened in spreadsheet software. Formula-like text cells beginning with `=`, `+`, `-` or `@` after leading whitespace receive an apostrophe; numeric cells and in-memory calculations remain unchanged. The default export preserves original text.
