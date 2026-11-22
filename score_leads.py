@@ -18,6 +18,14 @@ DEFAULT_MEDIUM_THRESHOLD = 40.0
 DEFAULT_HIGH_THRESHOLD = 70.0
 
 
+def _read_csv_input(csv_file, delimiter=",", **options):
+    if delimiter not in (",", ";", "\t", "|"):
+        raise ValueError("Unsupported input delimiter.")
+    frame = pd.read_csv(csv_file, **options, **({"sep": delimiter} if delimiter != "," else {}))
+    _reject_duplicate_headers(csv_file, delimiter)
+    return frame
+
+
 def escape_csv_formulas(frame):
     """Escape formula-like text in a copy; leave numeric cells unchanged."""
     def escape(value):
@@ -27,11 +35,11 @@ def escape_csv_formulas(frame):
     return frame.apply(lambda column: column.map(escape))
 
 
-def _reject_duplicate_headers(csv_file):
+def _reject_duplicate_headers(csv_file, delimiter=","):
     """Do not let pandas silently rename ambiguous source CSV columns."""
     if isinstance(csv_file, (str, os.PathLike)) and Path(csv_file).is_file():
         with open(csv_file, encoding="utf-8-sig", newline="") as source:
-            headers = next(csv.reader(source), [])
+            headers = next(csv.reader(source, delimiter=delimiter), [])
         if len(headers) != len(set(headers)):
             raise ValueError("CSV column names must be unique; duplicate headers are ambiguous.")
 
@@ -76,13 +84,13 @@ def score_leads(
     scoring_file=None,
     max_display_rows=20,
     sort_by_probability=False,
+    delimiter=",",
 ):
     try:
         validate_priority_thresholds(medium_threshold, high_threshold)
         if not isinstance(max_display_rows, int) or isinstance(max_display_rows, bool) or max_display_rows < 1:
             raise ValueError("max_display_rows must be a positive integer.")
-        df = pd.read_csv(csv_file)
-        _reject_duplicate_headers(csv_file)
+        df = _read_csv_input(csv_file, delimiter)
         missing = REQUIRED_COLUMNS.difference(df.columns)
         if missing:
             raise ValueError(f"CSV must include: {', '.join(sorted(missing))}")
@@ -113,8 +121,7 @@ def score_leads(
         training_features = df[FEATURE_COLUMNS].copy()
         training_labels = df["converted"].astype(int).copy()
         if scoring_file is not None:
-            candidates = pd.read_csv(scoring_file)
-            _reject_duplicate_headers(scoring_file)
+            candidates = _read_csv_input(scoring_file, delimiter)
             missing = set(FEATURE_COLUMNS).difference(candidates.columns)
             if missing:
                 raise ValueError(f"Scoring CSV must include: {', '.join(sorted(missing))}")
@@ -212,7 +219,9 @@ def main(argv=None):
     parser.add_argument("--sort-by-probability", action="store_true", help="Rank leads from highest conversion probability, keeping ties stable")
     parser.add_argument("--summary-output", help="Atomically export JSON lead counts, priority totals and mean conversion probability")
     parser.add_argument("--escape-formulas", action="store_true", help="Prefix formula-like text with an apostrophe in CSV exports; calculations remain unchanged")
+    parser.add_argument("--delimiter", choices=(",", ";", "tab", "|"), default=",", help="Input CSV delimiter; exports remain comma-separated")
     args = parser.parse_args(argv)
+    delimiter = "\t" if args.delimiter == "tab" else args.delimiter
     try:
         validate_priority_thresholds(args.medium_threshold, args.high_threshold)
     except ValueError as exc:
@@ -249,6 +258,8 @@ def main(argv=None):
 
     scoring_options = {"scoring_file": args.score_csv} if args.score_csv else {}
     scoring_options["max_display_rows"] = args.max_display_rows
+    if delimiter != ",":
+        scoring_options["delimiter"] = delimiter
     if args.sort_by_probability:
         scoring_options["sort_by_probability"] = True
     result = score_leads(

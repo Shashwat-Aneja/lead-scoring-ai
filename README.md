@@ -51,3 +51,5 @@ Use `--sort-by-probability` to rank the preview and complete export by descendin
 `--summary-output summary.json` atomically exports the scored lead count, all three priority counts and mean conversion probability. It cannot alias training/scoring inputs or the scored CSV output. The mean is a model estimate, not a calibrated accuracy metric.
 
 Use `--escape-formulas` when CSV exports will be opened in spreadsheet software. Formula-like text cells beginning with `=`, `+`, `-` or `@` after leading whitespace receive an apostrophe; numeric cells and in-memory calculations remain unchanged. The default export preserves original text.
+
+`--delimiter ";"`, `--delimiter tab` and `--delimiter "|"` support alternate input CSV separators, including quoted fields. Duplicate-header validation uses the selected separator. The default input and all CSV exports remain comma-separated.
