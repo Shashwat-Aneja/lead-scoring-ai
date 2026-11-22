@@ -85,9 +85,12 @@ def score_leads(
     max_display_rows=20,
     sort_by_probability=False,
     delimiter=",",
+    balance_classes=False,
 ):
     try:
         validate_priority_thresholds(medium_threshold, high_threshold)
+        if not isinstance(balance_classes, bool):
+            raise ValueError("balance_classes must be a boolean.")
         if not isinstance(max_display_rows, int) or isinstance(max_display_rows, bool) or max_display_rows < 1:
             raise ValueError("max_display_rows must be a positive integer.")
         df = _read_csv_input(csv_file, delimiter)
@@ -117,7 +120,7 @@ def score_leads(
         if df["converted"].nunique() != 2:
             raise ValueError("Training data must contain both converted and non-converted leads.")
 
-        model = make_pipeline(MaxAbsScaler(), StandardScaler(), LogisticRegression(max_iter=1000))
+        model = make_pipeline(MaxAbsScaler(), StandardScaler(), LogisticRegression(max_iter=1000, **({"class_weight": "balanced"} if balance_classes else {})))
         training_features = df[FEATURE_COLUMNS].copy()
         training_labels = df["converted"].astype(int).copy()
         if scoring_file is not None:
@@ -220,6 +223,7 @@ def main(argv=None):
     parser.add_argument("--summary-output", help="Atomically export JSON lead counts, priority totals and mean conversion probability")
     parser.add_argument("--escape-formulas", action="store_true", help="Prefix formula-like text with an apostrophe in CSV exports; calculations remain unchanged")
     parser.add_argument("--delimiter", choices=(",", ";", "tab", "|"), default=",", help="Input CSV delimiter; exports remain comma-separated")
+    parser.add_argument("--balance-classes", action="store_true", help="Use inverse-frequency training class weights for imbalanced labels")
     args = parser.parse_args(argv)
     delimiter = "\t" if args.delimiter == "tab" else args.delimiter
     try:
@@ -258,6 +262,8 @@ def main(argv=None):
 
     scoring_options = {"scoring_file": args.score_csv} if args.score_csv else {}
     scoring_options["max_display_rows"] = args.max_display_rows
+    if args.balance_classes:
+        scoring_options["balance_classes"] = True
     if delimiter != ",":
         scoring_options["delimiter"] = delimiter
     if args.sort_by_probability:

@@ -53,3 +53,5 @@ Use `--sort-by-probability` to rank the preview and complete export by descendin
 Use `--escape-formulas` when CSV exports will be opened in spreadsheet software. Formula-like text cells beginning with `=`, `+`, `-` or `@` after leading whitespace receive an apostrophe; numeric cells and in-memory calculations remain unchanged. The default export preserves original text.
 
 `--delimiter ";"`, `--delimiter tab` and `--delimiter "|"` support alternate input CSV separators, including quoted fields. Duplicate-header validation uses the selected separator. The default input and all CSV exports remain comma-separated.
+
+`--balance-classes` enables inverse-frequency class weights in logistic-regression training. The default remains unweighted. Weighted-model scores can shift and are not guaranteed calibrated probabilities; compare outcomes with held-out data before using them for decisions.
