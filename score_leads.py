@@ -1,6 +1,8 @@
 import io
 import csv
 import argparse
+import warnings
+from sklearn.exceptions import ConvergenceWarning
 import json
 import os
 import tempfile
@@ -190,7 +192,12 @@ def score_leads(
             if (candidates[FEATURE_COLUMNS] < 0).any().any() or not np.equal(candidates["visits"], np.floor(candidates["visits"])).all():
                 raise ValueError("Scoring features must be non-negative and visits must be whole numbers.")
             df = candidates.copy()
-        model.fit(training_features, training_labels)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", ConvergenceWarning)
+                model.fit(training_features, training_labels)
+        except ConvergenceWarning as exc:
+            raise ValueError("Lead model did not converge; no scores were published.") from exc
         positive_class_index = list(model.classes_).index(1)
         df["conversion_probability"] = model.predict_proba(df[FEATURE_COLUMNS])[:, positive_class_index] * 100
         df["priority"] = df["conversion_probability"].apply(
