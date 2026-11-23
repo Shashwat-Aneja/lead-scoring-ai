@@ -55,3 +55,5 @@ Use `--escape-formulas` when CSV exports will be opened in spreadsheet software.
 `--delimiter ";"`, `--delimiter tab` and `--delimiter "|"` support alternate input CSV separators, including quoted fields. Duplicate-header validation uses the selected separator. The default input and all CSV exports remain comma-separated.
 
 `--balance-classes` enables inverse-frequency class weights in logistic-regression training. The default remains unweighted. Weighted-model scores can shift and are not guaranteed calibrated probabilities; compare outcomes with held-out data before using them for decisions.
+
+Seekable caller-owned text and UTF-8 binary CSV streams now receive the same duplicate-header checks as file paths, before pandas can rename ambiguous columns. Validation restores the starting position and leaves caller streams open; nonseekable stream objects are rejected explicitly.
