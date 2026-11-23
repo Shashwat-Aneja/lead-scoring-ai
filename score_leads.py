@@ -1,5 +1,8 @@
+import io
 import csv
 import argparse
+import warnings
+from sklearn.exceptions import ConvergenceWarning
 import json
 import os
 import tempfile
@@ -21,8 +24,8 @@ DEFAULT_HIGH_THRESHOLD = 70.0
 def _read_csv_input(csv_file, delimiter=",", **options):
     if delimiter not in (",", ";", "\t", "|"):
         raise ValueError("Unsupported input delimiter.")
-    frame = pd.read_csv(csv_file, **options, **({"sep": delimiter} if delimiter != "," else {}))
     _reject_duplicate_headers(csv_file, delimiter)
+    frame = pd.read_csv(csv_file, **options, **({"sep": delimiter} if delimiter != "," else {}))
     return frame
 
 
@@ -36,12 +39,61 @@ def escape_csv_formulas(frame):
 
 
 def _reject_duplicate_headers(csv_file, delimiter=","):
-    """Do not let pandas silently rename ambiguous source CSV columns."""
-    if isinstance(csv_file, (str, os.PathLike)) and Path(csv_file).is_file():
+    """Inspect original UTF-8 CSV headers without taking ownership of streams."""
+    def header_lines(source):
+        # csv.reader needs physical lines even for StringIO objects whose default
+        # iterator does not recognize CR-only records. Preserve quoted newlines.
+        pending = ""
+        first = True
+        started = False
+        while True:
+            chars = []
+            while True:
+                char = pending or source.read(1)
+                pending = ""
+                if not char:
+                    break
+                if first:
+                    first = False
+                    if char == "\ufeff":
+                        continue
+                chars.append(char)
+                if char == "\r":
+                    following = source.read(1)
+                    if following == "\n":
+                        chars.append(following)
+                    else:
+                        pending = following
+                    break
+                if char == "\n":
+                    break
+            if not chars:
+                return
+            line = "".join(chars)
+            if not started and not line.strip():
+                continue
+            started = True
+            yield line
+
+    if isinstance(csv_file, (str, os.PathLike)):
+        if not Path(csv_file).is_file():
+            return
         with open(csv_file, encoding="utf-8-sig", newline="") as source:
-            headers = next(csv.reader(source, delimiter=delimiter), [])
-        if len(headers) != len(set(headers)):
-            raise ValueError("CSV column names must be unique; duplicate headers are ambiguous.")
+            headers = next(csv.reader(header_lines(source), delimiter=delimiter), [])
+    else:
+        if not all(hasattr(csv_file, name) for name in ("read", "seek", "tell")) or (hasattr(csv_file, "seekable") and not csv_file.seekable()):
+            raise ValueError("CSV streams must be seekable for header validation.")
+        position = csv_file.tell()
+        binary = isinstance(csv_file.read(0), bytes)
+        source = io.TextIOWrapper(csv_file, encoding="utf-8-sig", newline="") if binary else csv_file
+        try:
+            headers = next(csv.reader(header_lines(source), delimiter=delimiter), [])
+        finally:
+            if binary:
+                source.detach()
+            csv_file.seek(position)
+    if len(headers) != len(set(headers)):
+        raise ValueError("CSV column names must be unique; duplicate headers are ambiguous.")
 
 
 def validate_priority_thresholds(medium_threshold, high_threshold):
@@ -86,9 +138,12 @@ def score_leads(
     sort_by_probability=False,
     delimiter=",",
     balance_classes=False,
+    top_n=None,
 ):
     try:
         validate_priority_thresholds(medium_threshold, high_threshold)
+        if top_n is not None and (not isinstance(top_n, int) or isinstance(top_n, bool) or top_n < 1):
+            raise ValueError("top_n must be a positive integer.")
         if not isinstance(balance_classes, bool):
             raise ValueError("balance_classes must be a boolean.")
         if not isinstance(max_display_rows, int) or isinstance(max_display_rows, bool) or max_display_rows < 1:
@@ -137,7 +192,12 @@ def score_leads(
             if (candidates[FEATURE_COLUMNS] < 0).any().any() or not np.equal(candidates["visits"], np.floor(candidates["visits"])).all():
                 raise ValueError("Scoring features must be non-negative and visits must be whole numbers.")
             df = candidates.copy()
-        model.fit(training_features, training_labels)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", ConvergenceWarning)
+                model.fit(training_features, training_labels)
+        except ConvergenceWarning as exc:
+            raise ValueError("Lead model did not converge; no scores were published.") from exc
         positive_class_index = list(model.classes_).index(1)
         df["conversion_probability"] = model.predict_proba(df[FEATURE_COLUMNS])[:, positive_class_index] * 100
         df["priority"] = df["conversion_probability"].apply(
@@ -146,13 +206,19 @@ def score_leads(
             )
         )
 
-        if sort_by_probability:
+        scored_lead_count = len(df)
+        if sort_by_probability or top_n is not None:
             df = df.sort_values("conversion_probability", ascending=False, kind="stable")
+        if top_n is not None and top_n < len(df):
+            df = df.head(top_n).copy()
+        df.attrs["scored_lead_count"] = scored_lead_count
 
         print("\n===== Lead Conversion Scoring =====")
+        if len(df) < scored_lead_count:
+            print(f"Selected top {len(df)} of {scored_lead_count} scored leads; exports follow this selection.")
         print(df[FEATURE_COLUMNS + ["conversion_probability", "priority"]].head(max_display_rows).to_string(index=False))
         if len(df) > max_display_rows:
-            print(f"Showing {max_display_rows} of {len(df)} leads; exports include every scored lead.")
+            print(f"Showing {max_display_rows} of {len(df)} leads; exports include every selected lead.")
         print("===================================\n")
         return df
     except (OSError, pd.errors.ParserError, ValueError) as exc:
@@ -182,7 +248,7 @@ def export_scored_leads(result, output_path, escape_formulas=False):
 def export_lead_summary(result, output_path):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"lead_count": len(result), "priority_counts": {tier: int((result["priority"] == tier).sum()) for tier in ("High", "Medium", "Low")},
+    payload = {"lead_count": len(result), "scored_lead_count": int(result.attrs.get("scored_lead_count", len(result))), "priority_counts": {tier: int((result["priority"] == tier).sum()) for tier in ("High", "Medium", "Low")},
                "average_conversion_probability": float(result["conversion_probability"].mean())}
     temporary = None
     try:
@@ -224,6 +290,7 @@ def main(argv=None):
     parser.add_argument("--escape-formulas", action="store_true", help="Prefix formula-like text with an apostrophe in CSV exports; calculations remain unchanged")
     parser.add_argument("--delimiter", choices=(",", ";", "tab", "|"), default=",", help="Input CSV delimiter; exports remain comma-separated")
     parser.add_argument("--balance-classes", action="store_true", help="Use inverse-frequency training class weights for imbalanced labels")
+    parser.add_argument("--top-n", type=int, help="Return and export only the N highest-scoring leads, with stable tie order")
     args = parser.parse_args(argv)
     delimiter = "\t" if args.delimiter == "tab" else args.delimiter
     try:
@@ -262,6 +329,8 @@ def main(argv=None):
 
     scoring_options = {"scoring_file": args.score_csv} if args.score_csv else {}
     scoring_options["max_display_rows"] = args.max_display_rows
+    if args.top_n is not None:
+        scoring_options["top_n"] = args.top_n
     if args.balance_classes:
         scoring_options["balance_classes"] = True
     if delimiter != ",":
