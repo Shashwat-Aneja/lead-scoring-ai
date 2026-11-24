@@ -149,6 +149,7 @@ def score_leads(
     delimiter=",",
     balance_classes=False,
     top_n=None,
+    id_column=None,
 ):
     try:
         validate_priority_thresholds(medium_threshold, high_threshold)
@@ -158,7 +159,10 @@ def score_leads(
             raise ValueError("balance_classes must be a boolean.")
         if not isinstance(max_display_rows, int) or isinstance(max_display_rows, bool) or max_display_rows < 1:
             raise ValueError("max_display_rows must be a positive integer.")
-        df = _read_csv_input(csv_file, delimiter)
+        if id_column is not None and (not isinstance(id_column, str) or not id_column.strip() or id_column in set(FEATURE_COLUMNS) | {"converted", "priority", "conversion_probability"}):
+            raise ValueError("Lead ID column must be a distinct source identifier.")
+        id_options = {"converters": {id_column: lambda value: "__id__" + value}} if id_column is not None else {}
+        df = _read_csv_input(csv_file, delimiter, **(id_options if scoring_file is None else {}))
         missing = REQUIRED_COLUMNS.difference(df.columns)
         if missing:
             raise ValueError(f"CSV must include: {', '.join(sorted(missing))}")
@@ -189,7 +193,7 @@ def score_leads(
         training_features = df[FEATURE_COLUMNS].copy()
         training_labels = df["converted"].astype(int).copy()
         if scoring_file is not None:
-            candidates = _read_csv_input(scoring_file, delimiter)
+            candidates = _read_csv_input(scoring_file, delimiter, **id_options)
             missing = set(FEATURE_COLUMNS).difference(candidates.columns)
             if missing:
                 raise ValueError(f"Scoring CSV must include: {', '.join(sorted(missing))}")
@@ -202,6 +206,13 @@ def score_leads(
             if (candidates[FEATURE_COLUMNS] < 0).any().any() or not np.equal(candidates["visits"], np.floor(candidates["visits"])).all():
                 raise ValueError("Scoring features must be non-negative and visits must be whole numbers.")
             df = candidates.copy()
+        if id_column is not None:
+            if id_column not in df.columns:
+                raise ValueError("Lead ID column was not found in the scored input.")
+            df[id_column] = df[id_column].astype("string").str.slice(6)
+            identifiers = df[id_column].str.strip()
+            if identifiers.isna().any() or identifiers.eq("").any() or identifiers.duplicated().any():
+                raise ValueError("Scored lead IDs must be non-empty and unique.")
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("error", ConvergenceWarning)
@@ -301,6 +312,7 @@ def main(argv=None):
     parser.add_argument("--delimiter", choices=(",", ";", "tab", "|"), default=",", help="Input CSV delimiter; exports remain comma-separated")
     parser.add_argument("--balance-classes", action="store_true", help="Use inverse-frequency training class weights for imbalanced labels")
     parser.add_argument("--top-n", type=int, help="Return and export only the N highest-scoring leads, with stable tie order")
+    parser.add_argument("--id-column", help="Require unique non-empty scored lead identifiers, preserving literal text and leading zeros")
     args = parser.parse_args(argv)
     delimiter = "\t" if args.delimiter == "tab" else args.delimiter
     try:
@@ -339,6 +351,8 @@ def main(argv=None):
 
     scoring_options = {"scoring_file": args.score_csv} if args.score_csv else {}
     scoring_options["max_display_rows"] = args.max_display_rows
+    if args.id_column is not None:
+        scoring_options["id_column"] = args.id_column
     if args.top_n is not None:
         scoring_options["top_n"] = args.top_n
     if args.balance_classes:
