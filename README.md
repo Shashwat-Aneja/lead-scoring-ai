@@ -63,3 +63,5 @@ Seekable caller-owned text and UTF-8 binary CSV streams now receive the same dup
 CSV paths ending in `.gz`, `.bz2`, or `.xz` are supported without unpacking a separate file. Header validation reads the same compression format as pandas and still rejects duplicate columns, including BOM-prefixed quoted headers and alternate delimiters. Archive containers such as ZIP/TAR are outside this feature.
 
 `--id-column NAME` validates unique, non-empty identifiers on the scored input (the separate scoring CSV when provided). Literal NA-like values and leading zeros are preserved across pandas versions. Uniqueness ignores surrounding whitespace; exported identifiers retain their source text.
+
+`--min-probability P` applies an inclusive 0–100 predicted-percentage floor before `--top-n` truncation. Reports disclose the original scored count. An empty selection is valid, produces a header-only scored CSV, and reports a null average probability rather than invalid JSON NaN. These model scores are not guaranteed calibrated probabilities.

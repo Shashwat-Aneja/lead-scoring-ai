@@ -150,9 +150,12 @@ def score_leads(
     balance_classes=False,
     top_n=None,
     id_column=None,
+    min_probability=None,
 ):
     try:
         validate_priority_thresholds(medium_threshold, high_threshold)
+        if min_probability is not None and (isinstance(min_probability, (bool, np.bool_)) or not isinstance(min_probability, Real) or not np.isfinite(min_probability) or not 0 <= min_probability <= 100):
+            raise ValueError("min_probability must be a finite percentage from 0 to 100.")
         if top_n is not None and (not isinstance(top_n, int) or isinstance(top_n, bool) or top_n < 1):
             raise ValueError("top_n must be a positive integer.")
         if not isinstance(balance_classes, bool):
@@ -230,13 +233,15 @@ def score_leads(
         scored_lead_count = len(df)
         if sort_by_probability or top_n is not None:
             df = df.sort_values("conversion_probability", ascending=False, kind="stable")
+        if min_probability is not None:
+            df = df.loc[df["conversion_probability"] >= min_probability].copy()
         if top_n is not None and top_n < len(df):
             df = df.head(top_n).copy()
         df.attrs["scored_lead_count"] = scored_lead_count
 
         print("\n===== Lead Conversion Scoring =====")
         if len(df) < scored_lead_count:
-            print(f"Selected top {len(df)} of {scored_lead_count} scored leads; exports follow this selection.")
+            print(f"Selected {len(df)} of {scored_lead_count} scored leads; exports follow this selection.")
         print(df[FEATURE_COLUMNS + ["conversion_probability", "priority"]].head(max_display_rows).to_string(index=False))
         if len(df) > max_display_rows:
             print(f"Showing {max_display_rows} of {len(df)} leads; exports include every selected lead.")
@@ -270,7 +275,7 @@ def export_lead_summary(result, output_path):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"lead_count": len(result), "scored_lead_count": int(result.attrs.get("scored_lead_count", len(result))), "priority_counts": {tier: int((result["priority"] == tier).sum()) for tier in ("High", "Medium", "Low")},
-               "average_conversion_probability": float(result["conversion_probability"].mean())}
+               "average_conversion_probability": float(result["conversion_probability"].mean()) if len(result) else None}
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output_path.parent, delete=False) as handle:
@@ -313,6 +318,7 @@ def main(argv=None):
     parser.add_argument("--balance-classes", action="store_true", help="Use inverse-frequency training class weights for imbalanced labels")
     parser.add_argument("--top-n", type=int, help="Return and export only the N highest-scoring leads, with stable tie order")
     parser.add_argument("--id-column", help="Require unique non-empty scored lead identifiers, preserving literal text and leading zeros")
+    parser.add_argument("--min-probability", type=float, help="Export only leads whose predicted conversion percentage meets this inclusive floor")
     args = parser.parse_args(argv)
     delimiter = "\t" if args.delimiter == "tab" else args.delimiter
     try:
@@ -353,6 +359,8 @@ def main(argv=None):
     scoring_options["max_display_rows"] = args.max_display_rows
     if args.id_column is not None:
         scoring_options["id_column"] = args.id_column
+    if args.min_probability is not None:
+        scoring_options["min_probability"] = args.min_probability
     if args.top_n is not None:
         scoring_options["top_n"] = args.top_n
     if args.balance_classes:
