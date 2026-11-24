@@ -1,3 +1,6 @@
+import gzip
+import bz2
+import lzma
 import io
 import csv
 import argparse
@@ -25,7 +28,10 @@ def _read_csv_input(csv_file, delimiter=",", **options):
     if delimiter not in (",", ";", "\t", "|"):
         raise ValueError("Unsupported input delimiter.")
     _reject_duplicate_headers(csv_file, delimiter)
-    frame = pd.read_csv(csv_file, **options, **({"sep": delimiter} if delimiter != "," else {}))
+    try:
+        frame = pd.read_csv(csv_file, **options, **({"sep": delimiter} if delimiter != "," else {}))
+    except (EOFError, lzma.LZMAError) as exc:
+        raise ValueError("Compressed CSV input is corrupt or incomplete.") from exc
     return frame
 
 
@@ -78,8 +84,12 @@ def _reject_duplicate_headers(csv_file, delimiter=","):
     if isinstance(csv_file, (str, os.PathLike)):
         if not Path(csv_file).is_file():
             return
-        with open(csv_file, encoding="utf-8-sig", newline="") as source:
-            headers = next(csv.reader(header_lines(source), delimiter=delimiter), [])
+        opener = {".gz": gzip.open, ".bz2": bz2.open, ".xz": lzma.open}.get(Path(csv_file).suffix, open)
+        try:
+            with opener(csv_file, mode="rt", encoding="utf-8-sig", newline="") as source:
+                headers = next(csv.reader(header_lines(source), delimiter=delimiter), [])
+        except (EOFError, lzma.LZMAError) as exc:
+            raise ValueError("Compressed CSV input is corrupt or incomplete.") from exc
     else:
         if not all(hasattr(csv_file, name) for name in ("read", "seek", "tell")) or (hasattr(csv_file, "seekable") and not csv_file.seekable()):
             raise ValueError("CSV streams must be seekable for header validation.")
@@ -139,16 +149,23 @@ def score_leads(
     delimiter=",",
     balance_classes=False,
     top_n=None,
+    id_column=None,
+    min_probability=None,
 ):
     try:
         validate_priority_thresholds(medium_threshold, high_threshold)
+        if min_probability is not None and (isinstance(min_probability, (bool, np.bool_)) or not isinstance(min_probability, Real) or not np.isfinite(min_probability) or not 0 <= min_probability <= 100):
+            raise ValueError("min_probability must be a finite percentage from 0 to 100.")
         if top_n is not None and (not isinstance(top_n, int) or isinstance(top_n, bool) or top_n < 1):
             raise ValueError("top_n must be a positive integer.")
         if not isinstance(balance_classes, bool):
             raise ValueError("balance_classes must be a boolean.")
         if not isinstance(max_display_rows, int) or isinstance(max_display_rows, bool) or max_display_rows < 1:
             raise ValueError("max_display_rows must be a positive integer.")
-        df = _read_csv_input(csv_file, delimiter)
+        if id_column is not None and (not isinstance(id_column, str) or not id_column.strip() or id_column in set(FEATURE_COLUMNS) | {"converted", "priority", "conversion_probability"}):
+            raise ValueError("Lead ID column must be a distinct source identifier.")
+        id_options = {"converters": {id_column: lambda value: "__id__" + value}} if id_column is not None else {}
+        df = _read_csv_input(csv_file, delimiter, **(id_options if scoring_file is None else {}))
         missing = REQUIRED_COLUMNS.difference(df.columns)
         if missing:
             raise ValueError(f"CSV must include: {', '.join(sorted(missing))}")
@@ -179,7 +196,7 @@ def score_leads(
         training_features = df[FEATURE_COLUMNS].copy()
         training_labels = df["converted"].astype(int).copy()
         if scoring_file is not None:
-            candidates = _read_csv_input(scoring_file, delimiter)
+            candidates = _read_csv_input(scoring_file, delimiter, **id_options)
             missing = set(FEATURE_COLUMNS).difference(candidates.columns)
             if missing:
                 raise ValueError(f"Scoring CSV must include: {', '.join(sorted(missing))}")
@@ -192,6 +209,13 @@ def score_leads(
             if (candidates[FEATURE_COLUMNS] < 0).any().any() or not np.equal(candidates["visits"], np.floor(candidates["visits"])).all():
                 raise ValueError("Scoring features must be non-negative and visits must be whole numbers.")
             df = candidates.copy()
+        if id_column is not None:
+            if id_column not in df.columns:
+                raise ValueError("Lead ID column was not found in the scored input.")
+            df[id_column] = df[id_column].astype("string").str.slice(6)
+            identifiers = df[id_column].str.strip()
+            if identifiers.isna().any() or identifiers.eq("").any() or identifiers.duplicated().any():
+                raise ValueError("Scored lead IDs must be non-empty and unique.")
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("error", ConvergenceWarning)
@@ -209,13 +233,15 @@ def score_leads(
         scored_lead_count = len(df)
         if sort_by_probability or top_n is not None:
             df = df.sort_values("conversion_probability", ascending=False, kind="stable")
+        if min_probability is not None:
+            df = df.loc[df["conversion_probability"] >= min_probability].copy()
         if top_n is not None and top_n < len(df):
             df = df.head(top_n).copy()
         df.attrs["scored_lead_count"] = scored_lead_count
 
         print("\n===== Lead Conversion Scoring =====")
         if len(df) < scored_lead_count:
-            print(f"Selected top {len(df)} of {scored_lead_count} scored leads; exports follow this selection.")
+            print(f"Selected {len(df)} of {scored_lead_count} scored leads; exports follow this selection.")
         print(df[FEATURE_COLUMNS + ["conversion_probability", "priority"]].head(max_display_rows).to_string(index=False))
         if len(df) > max_display_rows:
             print(f"Showing {max_display_rows} of {len(df)} leads; exports include every selected lead.")
@@ -249,7 +275,7 @@ def export_lead_summary(result, output_path):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"lead_count": len(result), "scored_lead_count": int(result.attrs.get("scored_lead_count", len(result))), "priority_counts": {tier: int((result["priority"] == tier).sum()) for tier in ("High", "Medium", "Low")},
-               "average_conversion_probability": float(result["conversion_probability"].mean())}
+               "average_conversion_probability": float(result["conversion_probability"].mean()) if len(result) else None}
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output_path.parent, delete=False) as handle:
@@ -291,6 +317,8 @@ def main(argv=None):
     parser.add_argument("--delimiter", choices=(",", ";", "tab", "|"), default=",", help="Input CSV delimiter; exports remain comma-separated")
     parser.add_argument("--balance-classes", action="store_true", help="Use inverse-frequency training class weights for imbalanced labels")
     parser.add_argument("--top-n", type=int, help="Return and export only the N highest-scoring leads, with stable tie order")
+    parser.add_argument("--id-column", help="Require unique non-empty scored lead identifiers, preserving literal text and leading zeros")
+    parser.add_argument("--min-probability", type=float, help="Export only leads whose predicted conversion percentage meets this inclusive floor")
     args = parser.parse_args(argv)
     delimiter = "\t" if args.delimiter == "tab" else args.delimiter
     try:
@@ -329,6 +357,10 @@ def main(argv=None):
 
     scoring_options = {"scoring_file": args.score_csv} if args.score_csv else {}
     scoring_options["max_display_rows"] = args.max_display_rows
+    if args.id_column is not None:
+        scoring_options["id_column"] = args.id_column
+    if args.min_probability is not None:
+        scoring_options["min_probability"] = args.min_probability
     if args.top_n is not None:
         scoring_options["top_n"] = args.top_n
     if args.balance_classes:
