@@ -65,3 +65,5 @@ CSV paths ending in `.gz`, `.bz2`, or `.xz` are supported without unpacking a se
 `--id-column NAME` validates unique, non-empty identifiers on the scored input (the separate scoring CSV when provided). Literal NA-like values and leading zeros are preserved across pandas versions. Uniqueness ignores surrounding whitespace; exported identifiers retain their source text.
 
 `--min-probability P` applies an inclusive 0–100 predicted-percentage floor before `--top-n` truncation. Reports disclose the original scored count. An empty selection is valid, produces a header-only scored CSV, and reports a null average probability rather than invalid JSON NaN. These model scores are not guaranteed calibrated probabilities.
+
+Corrupt compressed bodies, invalid DEFLATE blocks and header-parser limit failures use the normal validation-error path rather than escaping as EOFError, zlib.error or csv.Error. Header inspection restores caller stream position/ownership on these failures. No invalid input is exported.
