@@ -25,14 +25,22 @@ DEFAULT_MEDIUM_THRESHOLD = 40.0
 DEFAULT_HIGH_THRESHOLD = 70.0
 
 
-def _read_csv_input(csv_file, delimiter=",", **options):
+def _read_csv_input(csv_file, delimiter=",", max_rows=None, **options):
+    if max_rows is not None and (isinstance(max_rows, bool) or not isinstance(max_rows, int) or not 1 <= max_rows <= 10_000_000):
+        raise ValueError("max_rows must be an integer from 1 to 10000000.")
     if delimiter not in (",", ";", "\t", "|"):
         raise ValueError("Unsupported input delimiter.")
+    if max_rows is not None:
+        if "nrows" in options:
+            raise ValueError("Do not combine nrows and max_rows.")
+        options["nrows"] = max_rows + 1
     _reject_duplicate_headers(csv_file, delimiter)
     try:
         frame = pd.read_csv(csv_file, **options, **({"sep": delimiter} if delimiter != "," else {}))
     except (EOFError, lzma.LZMAError, zlib.error, csv.Error) as exc:
         raise ValueError("CSV input is corrupt or incomplete, or its header exceeds parser limits.") from exc
+    if max_rows is not None and len(frame) > max_rows:
+        raise ValueError("CSV input exceeds the configured row limit.")
     return frame
 
 
@@ -154,6 +162,7 @@ def score_leads(
     top_n=None,
     id_column=None,
     min_probability=None,
+    max_rows=None,
 ):
     try:
         validate_priority_thresholds(medium_threshold, high_threshold)
@@ -168,7 +177,7 @@ def score_leads(
         if id_column is not None and (not isinstance(id_column, str) or not id_column.strip() or id_column in set(FEATURE_COLUMNS) | {"converted", "priority", "conversion_probability"}):
             raise ValueError("Lead ID column must be a distinct source identifier.")
         id_options = {"converters": {id_column: lambda value: "__id__" + value}} if id_column is not None else {}
-        df = _read_csv_input(csv_file, delimiter, **(id_options if scoring_file is None else {}))
+        df = _read_csv_input(csv_file, delimiter, **({"max_rows": max_rows} if max_rows is not None else {}), **(id_options if scoring_file is None else {}))
         missing = REQUIRED_COLUMNS.difference(df.columns)
         if missing:
             raise ValueError(f"CSV must include: {', '.join(sorted(missing))}")
@@ -199,7 +208,7 @@ def score_leads(
         training_features = df[FEATURE_COLUMNS].copy()
         training_labels = df["converted"].astype(int).copy()
         if scoring_file is not None:
-            candidates = _read_csv_input(scoring_file, delimiter, **id_options)
+            candidates = _read_csv_input(scoring_file, delimiter, **({"max_rows": max_rows} if max_rows is not None else {}), **id_options)
             missing = set(FEATURE_COLUMNS).difference(candidates.columns)
             if missing:
                 raise ValueError(f"Scoring CSV must include: {', '.join(sorted(missing))}")
@@ -322,7 +331,10 @@ def main(argv=None):
     parser.add_argument("--top-n", type=int, help="Return and export only the N highest-scoring leads, with stable tie order")
     parser.add_argument("--id-column", help="Require unique non-empty scored lead identifiers, preserving literal text and leading zeros")
     parser.add_argument("--min-probability", type=float, help="Export only leads whose predicted conversion percentage meets this inclusive floor")
+    parser.add_argument("--max-input-rows", type=int, help="Reject CSV files exceeding this raw row budget (1..10000000)")
     args = parser.parse_args(argv)
+    if args.max_input_rows is not None and not 1 <= args.max_input_rows <= 10_000_000:
+        parser.error("--max-input-rows must be from 1 to 10000000")
     delimiter = "\t" if args.delimiter == "tab" else args.delimiter
     try:
         validate_priority_thresholds(args.medium_threshold, args.high_threshold)
@@ -368,6 +380,8 @@ def main(argv=None):
         scoring_options["top_n"] = args.top_n
     if args.balance_classes:
         scoring_options["balance_classes"] = True
+    if args.max_input_rows is not None:
+        scoring_options["max_rows"] = args.max_input_rows
     if delimiter != ",":
         scoring_options["delimiter"] = delimiter
     if args.sort_by_probability:
