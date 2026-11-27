@@ -249,6 +249,7 @@ def score_leads(
             df = df.loc[df["conversion_probability"] >= min_probability].copy()
         if top_n is not None and top_n < len(df):
             df = df.head(top_n).copy()
+        df.attrs["training_population"] = {"samples": len(training_labels), "converted": int(training_labels.sum()), "not_converted": int((training_labels == 0).sum()), "conversion_rate_percent": float(training_labels.mean() * 100)}
         df.attrs["scored_lead_count"] = scored_lead_count
 
         print("\n===== Lead Conversion Scoring =====")
@@ -288,6 +289,8 @@ def export_lead_summary(result, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"lead_count": len(result), "scored_lead_count": int(result.attrs.get("scored_lead_count", len(result))), "priority_counts": {tier: int((result["priority"] == tier).sum()) for tier in ("High", "Medium", "Low")},
                "average_conversion_probability": float(result["conversion_probability"].mean()) if len(result) else None}
+    if "training_population" in result.attrs:
+        payload["training_population"] = result.attrs["training_population"]
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output_path.parent, delete=False) as handle:
