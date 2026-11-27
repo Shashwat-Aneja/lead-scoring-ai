@@ -162,9 +162,12 @@ def score_leads(
     top_n=None,
     id_column=None,
     min_probability=None,
+    regularization_c=1.0,
     max_rows=None,
 ):
     try:
+        if isinstance(regularization_c, (bool, np.bool_)) or not isinstance(regularization_c, Real) or not np.isfinite(regularization_c) or not 1e-12 <= regularization_c <= 1000:
+            raise ValueError("regularization_c must be finite from 1e-12 to 1000.")
         validate_priority_thresholds(medium_threshold, high_threshold)
         if min_probability is not None and (isinstance(min_probability, (bool, np.bool_)) or not isinstance(min_probability, Real) or not np.isfinite(min_probability) or not 0 <= min_probability <= 100):
             raise ValueError("min_probability must be a finite percentage from 0 to 100.")
@@ -204,7 +207,7 @@ def score_leads(
         if df["converted"].nunique() != 2:
             raise ValueError("Training data must contain both converted and non-converted leads.")
 
-        model = make_pipeline(MaxAbsScaler(), StandardScaler(), LogisticRegression(max_iter=1000, **({"class_weight": "balanced"} if balance_classes else {})))
+        model = make_pipeline(MaxAbsScaler(), StandardScaler(), LogisticRegression(max_iter=1000, **({"C": regularization_c} if regularization_c != 1.0 else {}), **({"class_weight": "balanced"} if balance_classes else {})))
         training_features = df[FEATURE_COLUMNS].copy()
         training_labels = df["converted"].astype(int).copy()
         if scoring_file is not None:
@@ -335,6 +338,7 @@ def main(argv=None):
     parser.add_argument("--id-column", help="Require unique non-empty scored lead identifiers, preserving literal text and leading zeros")
     parser.add_argument("--min-probability", type=float, help="Export only leads whose predicted conversion percentage meets this inclusive floor")
     parser.add_argument("--max-input-rows", type=int, help="Reject CSV files exceeding this raw row budget (1..10000000)")
+    parser.add_argument("--regularization-c", type=float, default=1.0, help="Inverse regularization strength (1e-12..1000)")
     args = parser.parse_args(argv)
     if args.max_input_rows is not None and not 1 <= args.max_input_rows <= 10_000_000:
         parser.error("--max-input-rows must be from 1 to 10000000")
@@ -383,6 +387,8 @@ def main(argv=None):
         scoring_options["top_n"] = args.top_n
     if args.balance_classes:
         scoring_options["balance_classes"] = True
+    if args.regularization_c != 1.0:
+        scoring_options["regularization_c"] = args.regularization_c
     if args.max_input_rows is not None:
         scoring_options["max_rows"] = args.max_input_rows
     if delimiter != ",":
