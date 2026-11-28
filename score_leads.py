@@ -25,7 +25,58 @@ DEFAULT_MEDIUM_THRESHOLD = 40.0
 DEFAULT_HIGH_THRESHOLD = 70.0
 
 
-def _read_csv_input(csv_file, delimiter=",", max_rows=None, encoding="utf-8", **options):
+def _snapshot_csv_input(csv_file, max_bytes, encoding):
+    """Snapshot bounded decompressed CSV bytes without consuming caller streams."""
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or not 1 <= max_bytes <= 64 * 1024 * 1024:
+        raise ValueError("max_bytes must be an integer from 1 to 67108864.")
+    def read_complete(source):
+        chunks = []
+        units = 0
+        kind = None
+        while units <= max_bytes:
+            chunk = source.read(min(65536, max_bytes + 1 - units))
+            if not isinstance(chunk, (str, bytes)):
+                raise ValueError("CSV stream read must return bytes or text.")
+            if kind is not None and type(chunk) is not kind:
+                raise ValueError("CSV stream read type must be consistent.")
+            kind = type(chunk)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            units += len(chunk)
+        # Encode text once so codecs with BOMs do not insert one per chunk.
+        raw = ("".join(chunks).encode(encoding) if kind is str else b"".join(chunks))
+        return raw
+    if isinstance(csv_file, (str, os.PathLike)):
+        path = Path(csv_file)
+        if not path.is_file():
+            raise ValueError("Bounded CSV input must be a local regular file or seekable stream.")
+        opener = {".gz": gzip.open, ".bz2": bz2.open, ".xz": lzma.open}.get(path.suffix.lower(), open)
+        try:
+            with opener(path, "rb") as source:
+                raw = read_complete(source)
+        except (EOFError, lzma.LZMAError, zlib.error) as exc:
+            raise ValueError("CSV input is corrupt or incomplete.") from exc
+    else:
+        if not all(hasattr(csv_file, name) for name in ("read", "seek", "tell")) or (hasattr(csv_file, "seekable") and not csv_file.seekable()):
+            raise ValueError("Bounded CSV streams must be seekable.")
+        position = csv_file.tell()
+        try:
+            raw = read_complete(csv_file)
+        except (EOFError, lzma.LZMAError, zlib.error) as exc:
+            raise ValueError("CSV input is corrupt or incomplete.") from exc
+        finally:
+            csv_file.seek(position)
+        if isinstance(raw, str):
+            raw = raw.encode(encoding)
+        if not isinstance(raw, bytes):
+            raise ValueError("CSV stream read must return bytes or text.")
+    if len(raw) > max_bytes:
+        raise ValueError("CSV input exceeds the configured decompressed byte limit.")
+    return io.BytesIO(raw)
+
+
+def _read_csv_input(csv_file, delimiter=",", max_rows=None, encoding="utf-8", max_bytes=None, **options):
     if encoding not in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
         raise ValueError("Unsupported input encoding.")
     if max_rows is not None and (isinstance(max_rows, bool) or not isinstance(max_rows, int) or not 1 <= max_rows <= 10_000_000):
@@ -36,6 +87,8 @@ def _read_csv_input(csv_file, delimiter=",", max_rows=None, encoding="utf-8", **
         if "nrows" in options:
             raise ValueError("Do not combine nrows and max_rows.")
         options["nrows"] = max_rows + 1
+    if max_bytes is not None:
+        csv_file = _snapshot_csv_input(csv_file, max_bytes, encoding)
     _reject_duplicate_headers(csv_file, delimiter, encoding=encoding)
     try:
         frame = pd.read_csv(csv_file, **({"encoding": encoding} if encoding != "utf-8" else {}), **options, **({"sep": delimiter} if delimiter != "," else {}))
@@ -167,6 +220,7 @@ def score_leads(
     regularization_c=1.0,
     max_rows=None,
     encoding="utf-8",
+    max_bytes=None,
 ):
     try:
         if isinstance(regularization_c, (bool, np.bool_)) or not isinstance(regularization_c, Real) or not np.isfinite(regularization_c) or not 1e-12 <= regularization_c <= 1000:
@@ -183,7 +237,7 @@ def score_leads(
         if id_column is not None and (not isinstance(id_column, str) or not id_column.strip() or id_column in set(FEATURE_COLUMNS) | {"converted", "priority", "conversion_probability"}):
             raise ValueError("Lead ID column must be a distinct source identifier.")
         id_options = {"converters": {id_column: lambda value: "__id__" + value}} if id_column is not None else {}
-        df = _read_csv_input(csv_file, delimiter, **({"encoding": encoding} if encoding != "utf-8" else {}), **({"max_rows": max_rows} if max_rows is not None else {}), **(id_options if scoring_file is None else {}))
+        df = _read_csv_input(csv_file, delimiter, **({"max_bytes": max_bytes} if max_bytes is not None else {}), **({"encoding": encoding} if encoding != "utf-8" else {}), **({"max_rows": max_rows} if max_rows is not None else {}), **(id_options if scoring_file is None else {}))
         missing = REQUIRED_COLUMNS.difference(df.columns)
         if missing:
             raise ValueError(f"CSV must include: {', '.join(sorted(missing))}")
@@ -214,7 +268,7 @@ def score_leads(
         training_features = df[FEATURE_COLUMNS].copy()
         training_labels = df["converted"].astype(int).copy()
         if scoring_file is not None:
-            candidates = _read_csv_input(scoring_file, delimiter, **({"encoding": encoding} if encoding != "utf-8" else {}), **({"max_rows": max_rows} if max_rows is not None else {}), **id_options)
+            candidates = _read_csv_input(scoring_file, delimiter, **({"max_bytes": max_bytes} if max_bytes is not None else {}), **({"encoding": encoding} if encoding != "utf-8" else {}), **({"max_rows": max_rows} if max_rows is not None else {}), **id_options)
             missing = set(FEATURE_COLUMNS).difference(candidates.columns)
             if missing:
                 raise ValueError(f"Scoring CSV must include: {', '.join(sorted(missing))}")
@@ -343,7 +397,10 @@ def main(argv=None):
     parser.add_argument("--max-input-rows", type=int, help="Reject CSV files exceeding this raw row budget (1..10000000)")
     parser.add_argument("--regularization-c", type=float, default=1.0, help="Inverse regularization strength (1e-12..1000)")
     parser.add_argument("--encoding", choices=("utf-8", "utf-8-sig", "cp1252", "latin-1"), default="utf-8", help="Input CSV text encoding; output encoding remains UTF-8")
+    parser.add_argument("--max-input-bytes", type=int, help="Snapshot and bound each decompressed CSV input (1..67108864 bytes)")
     args = parser.parse_args(argv)
+    if args.max_input_bytes is not None and not 1 <= args.max_input_bytes <= 64 * 1024 * 1024:
+        parser.error("--max-input-bytes must be from 1 to 67108864")
     if args.max_input_rows is not None and not 1 <= args.max_input_rows <= 10_000_000:
         parser.error("--max-input-rows must be from 1 to 10000000")
     delimiter = "\t" if args.delimiter == "tab" else args.delimiter
@@ -395,6 +452,8 @@ def main(argv=None):
         scoring_options["regularization_c"] = args.regularization_c
     if args.encoding != "utf-8":
         scoring_options["encoding"] = args.encoding
+    if args.max_input_bytes is not None:
+        scoring_options["max_bytes"] = args.max_input_bytes
     if args.max_input_rows is not None:
         scoring_options["max_rows"] = args.max_input_rows
     if delimiter != ",":
