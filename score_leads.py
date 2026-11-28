@@ -25,7 +25,9 @@ DEFAULT_MEDIUM_THRESHOLD = 40.0
 DEFAULT_HIGH_THRESHOLD = 70.0
 
 
-def _read_csv_input(csv_file, delimiter=",", max_rows=None, **options):
+def _read_csv_input(csv_file, delimiter=",", max_rows=None, encoding="utf-8", **options):
+    if encoding not in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
+        raise ValueError("Unsupported input encoding.")
     if max_rows is not None and (isinstance(max_rows, bool) or not isinstance(max_rows, int) or not 1 <= max_rows <= 10_000_000):
         raise ValueError("max_rows must be an integer from 1 to 10000000.")
     if delimiter not in (",", ";", "\t", "|"):
@@ -34,9 +36,9 @@ def _read_csv_input(csv_file, delimiter=",", max_rows=None, **options):
         if "nrows" in options:
             raise ValueError("Do not combine nrows and max_rows.")
         options["nrows"] = max_rows + 1
-    _reject_duplicate_headers(csv_file, delimiter)
+    _reject_duplicate_headers(csv_file, delimiter, encoding=encoding)
     try:
-        frame = pd.read_csv(csv_file, **options, **({"sep": delimiter} if delimiter != "," else {}))
+        frame = pd.read_csv(csv_file, **({"encoding": encoding} if encoding != "utf-8" else {}), **options, **({"sep": delimiter} if delimiter != "," else {}))
     except (EOFError, lzma.LZMAError, zlib.error, csv.Error) as exc:
         raise ValueError("CSV input is corrupt or incomplete, or its header exceeds parser limits.") from exc
     if max_rows is not None and len(frame) > max_rows:
@@ -53,7 +55,7 @@ def escape_csv_formulas(frame):
     return frame.apply(lambda column: column.map(escape))
 
 
-def _reject_duplicate_headers(csv_file, delimiter=","):
+def _reject_duplicate_headers(csv_file, delimiter=",", encoding="utf-8"):
     """Inspect original UTF-8 CSV headers without taking ownership of streams."""
     def header_lines(source):
         # csv.reader needs physical lines even for StringIO objects whose default
@@ -95,7 +97,7 @@ def _reject_duplicate_headers(csv_file, delimiter=","):
             return
         opener = {".gz": gzip.open, ".bz2": bz2.open, ".xz": lzma.open}.get(Path(csv_file).suffix, open)
         try:
-            with opener(csv_file, mode="rt", encoding="utf-8-sig", newline="") as source:
+            with opener(csv_file, mode="rt", encoding=encoding, newline="") as source:
                 headers = next(csv.reader(header_lines(source), delimiter=delimiter), [])
         except (EOFError, lzma.LZMAError, zlib.error, csv.Error) as exc:
             raise ValueError("CSV input is corrupt or incomplete, or its header exceeds parser limits.") from exc
@@ -104,7 +106,7 @@ def _reject_duplicate_headers(csv_file, delimiter=","):
             raise ValueError("CSV streams must be seekable for header validation.")
         position = csv_file.tell()
         binary = isinstance(csv_file.read(0), bytes)
-        source = io.TextIOWrapper(csv_file, encoding="utf-8-sig", newline="") if binary else csv_file
+        source = io.TextIOWrapper(csv_file, encoding=encoding, newline="") if binary else csv_file
         try:
             headers = next(csv.reader(header_lines(source), delimiter=delimiter), [])
         except (EOFError, lzma.LZMAError, zlib.error, csv.Error) as exc:
@@ -164,6 +166,7 @@ def score_leads(
     min_probability=None,
     regularization_c=1.0,
     max_rows=None,
+    encoding="utf-8",
 ):
     try:
         if isinstance(regularization_c, (bool, np.bool_)) or not isinstance(regularization_c, Real) or not np.isfinite(regularization_c) or not 1e-12 <= regularization_c <= 1000:
@@ -180,7 +183,7 @@ def score_leads(
         if id_column is not None and (not isinstance(id_column, str) or not id_column.strip() or id_column in set(FEATURE_COLUMNS) | {"converted", "priority", "conversion_probability"}):
             raise ValueError("Lead ID column must be a distinct source identifier.")
         id_options = {"converters": {id_column: lambda value: "__id__" + value}} if id_column is not None else {}
-        df = _read_csv_input(csv_file, delimiter, **({"max_rows": max_rows} if max_rows is not None else {}), **(id_options if scoring_file is None else {}))
+        df = _read_csv_input(csv_file, delimiter, **({"encoding": encoding} if encoding != "utf-8" else {}), **({"max_rows": max_rows} if max_rows is not None else {}), **(id_options if scoring_file is None else {}))
         missing = REQUIRED_COLUMNS.difference(df.columns)
         if missing:
             raise ValueError(f"CSV must include: {', '.join(sorted(missing))}")
@@ -211,7 +214,7 @@ def score_leads(
         training_features = df[FEATURE_COLUMNS].copy()
         training_labels = df["converted"].astype(int).copy()
         if scoring_file is not None:
-            candidates = _read_csv_input(scoring_file, delimiter, **({"max_rows": max_rows} if max_rows is not None else {}), **id_options)
+            candidates = _read_csv_input(scoring_file, delimiter, **({"encoding": encoding} if encoding != "utf-8" else {}), **({"max_rows": max_rows} if max_rows is not None else {}), **id_options)
             missing = set(FEATURE_COLUMNS).difference(candidates.columns)
             if missing:
                 raise ValueError(f"Scoring CSV must include: {', '.join(sorted(missing))}")
@@ -339,6 +342,7 @@ def main(argv=None):
     parser.add_argument("--min-probability", type=float, help="Export only leads whose predicted conversion percentage meets this inclusive floor")
     parser.add_argument("--max-input-rows", type=int, help="Reject CSV files exceeding this raw row budget (1..10000000)")
     parser.add_argument("--regularization-c", type=float, default=1.0, help="Inverse regularization strength (1e-12..1000)")
+    parser.add_argument("--encoding", choices=("utf-8", "utf-8-sig", "cp1252", "latin-1"), default="utf-8", help="Input CSV text encoding; output encoding remains UTF-8")
     args = parser.parse_args(argv)
     if args.max_input_rows is not None and not 1 <= args.max_input_rows <= 10_000_000:
         parser.error("--max-input-rows must be from 1 to 10000000")
@@ -389,6 +393,8 @@ def main(argv=None):
         scoring_options["balance_classes"] = True
     if args.regularization_c != 1.0:
         scoring_options["regularization_c"] = args.regularization_c
+    if args.encoding != "utf-8":
+        scoring_options["encoding"] = args.encoding
     if args.max_input_rows is not None:
         scoring_options["max_rows"] = args.max_input_rows
     if delimiter != ",":

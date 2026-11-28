@@ -75,3 +75,5 @@ Use `--max-input-rows 100000` to reject an input file with more than that many d
 Lead summary JSON includes `training_population` with original labeled sample count, class counts and observed conversion rate, independently of candidate selection and top-N filtering. This describes training data rather than an evaluation score.
 
 `--regularization-c` controls logistic regression inverse regularization strength (finite 1e-12..1000, default 1). Smaller values shrink score differences; this is not probability calibration.
+
+`--encoding utf-8|utf-8-sig|cp1252|latin-1` explicitly selects CSV input decoding, including compressed files and binary streams. Header validation and data parsing use the same encoding; comparison/training/scoring inputs share it. The default remains UTF-8, and export encoding is unchanged. Text streams are already decoded by their caller.
