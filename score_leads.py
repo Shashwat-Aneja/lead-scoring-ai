@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import zlib
 import gzip
 import bz2
@@ -76,7 +78,7 @@ def _snapshot_csv_input(csv_file, max_bytes, encoding):
     return io.BytesIO(raw)
 
 
-def _read_csv_input(csv_file, delimiter=",", max_rows=None, encoding="utf-8", max_bytes=None, **options):
+def _read_csv_input(csv_file, delimiter=",", max_rows=None, encoding="utf-8", max_bytes=None, expected_sha256=None, **options):
     if encoding not in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
         raise ValueError("Unsupported input encoding.")
     if max_rows is not None and (isinstance(max_rows, bool) or not isinstance(max_rows, int) or not 1 <= max_rows <= 10_000_000):
@@ -87,7 +89,14 @@ def _read_csv_input(csv_file, delimiter=",", max_rows=None, encoding="utf-8", ma
         if "nrows" in options:
             raise ValueError("Do not combine nrows and max_rows.")
         options["nrows"] = max_rows + 1
-    if max_bytes is not None:
+    if expected_sha256 is not None:
+        if not isinstance(expected_sha256, str) or len(expected_sha256) != 64 or any(c not in "0123456789abcdefABCDEF" for c in expected_sha256):
+            raise ValueError("expected_sha256 must be a 64-character hexadecimal digest.")
+        csv_file = _snapshot_csv_input(csv_file, max_bytes if max_bytes is not None else 64 * 1024 * 1024, encoding)
+        actual = hashlib.sha256(csv_file.getbuffer()).hexdigest()
+        if not hmac.compare_digest(actual, expected_sha256.lower()):
+            raise ValueError("CSV input SHA-256 does not match the expected digest.")
+    elif max_bytes is not None:
         csv_file = _snapshot_csv_input(csv_file, max_bytes, encoding)
     _reject_duplicate_headers(csv_file, delimiter, encoding=encoding)
     try:
@@ -221,6 +230,7 @@ def score_leads(
     max_rows=None,
     encoding="utf-8",
     max_bytes=None,
+    expected_sha256=None,
 ):
     try:
         if isinstance(regularization_c, (bool, np.bool_)) or not isinstance(regularization_c, Real) or not np.isfinite(regularization_c) or not 1e-12 <= regularization_c <= 1000:
@@ -237,7 +247,7 @@ def score_leads(
         if id_column is not None and (not isinstance(id_column, str) or not id_column.strip() or id_column in set(FEATURE_COLUMNS) | {"converted", "priority", "conversion_probability"}):
             raise ValueError("Lead ID column must be a distinct source identifier.")
         id_options = {"converters": {id_column: lambda value: "__id__" + value}} if id_column is not None else {}
-        df = _read_csv_input(csv_file, delimiter, **({"max_bytes": max_bytes} if max_bytes is not None else {}), **({"encoding": encoding} if encoding != "utf-8" else {}), **({"max_rows": max_rows} if max_rows is not None else {}), **(id_options if scoring_file is None else {}))
+        df = _read_csv_input(csv_file, delimiter, **({"expected_sha256": expected_sha256} if expected_sha256 is not None else {}), **({"max_bytes": max_bytes} if max_bytes is not None else {}), **({"encoding": encoding} if encoding != "utf-8" else {}), **({"max_rows": max_rows} if max_rows is not None else {}), **(id_options if scoring_file is None else {}))
         missing = REQUIRED_COLUMNS.difference(df.columns)
         if missing:
             raise ValueError(f"CSV must include: {', '.join(sorted(missing))}")
@@ -398,6 +408,7 @@ def main(argv=None):
     parser.add_argument("--regularization-c", type=float, default=1.0, help="Inverse regularization strength (1e-12..1000)")
     parser.add_argument("--encoding", choices=("utf-8", "utf-8-sig", "cp1252", "latin-1"), default="utf-8", help="Input CSV text encoding; output encoding remains UTF-8")
     parser.add_argument("--max-input-bytes", type=int, help="Snapshot and bound each decompressed CSV input (1..67108864 bytes)")
+    parser.add_argument("--expect-input-sha256", help="Require the main CSV input to match this SHA-256 of decompressed bytes")
     args = parser.parse_args(argv)
     if args.max_input_bytes is not None and not 1 <= args.max_input_bytes <= 64 * 1024 * 1024:
         parser.error("--max-input-bytes must be from 1 to 67108864")
@@ -454,6 +465,8 @@ def main(argv=None):
         scoring_options["encoding"] = args.encoding
     if args.max_input_bytes is not None:
         scoring_options["max_bytes"] = args.max_input_bytes
+    if args.expect_input_sha256 is not None:
+        scoring_options["expected_sha256"] = args.expect_input_sha256
     if args.max_input_rows is not None:
         scoring_options["max_rows"] = args.max_input_rows
     if delimiter != ",":
