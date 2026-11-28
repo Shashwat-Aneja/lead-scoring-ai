@@ -25,14 +25,22 @@ DEFAULT_MEDIUM_THRESHOLD = 40.0
 DEFAULT_HIGH_THRESHOLD = 70.0
 
 
-def _read_csv_input(csv_file, delimiter=",", **options):
+def _read_csv_input(csv_file, delimiter=",", max_rows=None, **options):
+    if max_rows is not None and (isinstance(max_rows, bool) or not isinstance(max_rows, int) or not 1 <= max_rows <= 10_000_000):
+        raise ValueError("max_rows must be an integer from 1 to 10000000.")
     if delimiter not in (",", ";", "\t", "|"):
         raise ValueError("Unsupported input delimiter.")
+    if max_rows is not None:
+        if "nrows" in options:
+            raise ValueError("Do not combine nrows and max_rows.")
+        options["nrows"] = max_rows + 1
     _reject_duplicate_headers(csv_file, delimiter)
     try:
         frame = pd.read_csv(csv_file, **options, **({"sep": delimiter} if delimiter != "," else {}))
     except (EOFError, lzma.LZMAError, zlib.error, csv.Error) as exc:
         raise ValueError("CSV input is corrupt or incomplete, or its header exceeds parser limits.") from exc
+    if max_rows is not None and len(frame) > max_rows:
+        raise ValueError("CSV input exceeds the configured row limit.")
     return frame
 
 
@@ -154,8 +162,12 @@ def score_leads(
     top_n=None,
     id_column=None,
     min_probability=None,
+    regularization_c=1.0,
+    max_rows=None,
 ):
     try:
+        if isinstance(regularization_c, (bool, np.bool_)) or not isinstance(regularization_c, Real) or not np.isfinite(regularization_c) or not 1e-12 <= regularization_c <= 1000:
+            raise ValueError("regularization_c must be finite from 1e-12 to 1000.")
         validate_priority_thresholds(medium_threshold, high_threshold)
         if min_probability is not None and (isinstance(min_probability, (bool, np.bool_)) or not isinstance(min_probability, Real) or not np.isfinite(min_probability) or not 0 <= min_probability <= 100):
             raise ValueError("min_probability must be a finite percentage from 0 to 100.")
@@ -168,7 +180,7 @@ def score_leads(
         if id_column is not None and (not isinstance(id_column, str) or not id_column.strip() or id_column in set(FEATURE_COLUMNS) | {"converted", "priority", "conversion_probability"}):
             raise ValueError("Lead ID column must be a distinct source identifier.")
         id_options = {"converters": {id_column: lambda value: "__id__" + value}} if id_column is not None else {}
-        df = _read_csv_input(csv_file, delimiter, **(id_options if scoring_file is None else {}))
+        df = _read_csv_input(csv_file, delimiter, **({"max_rows": max_rows} if max_rows is not None else {}), **(id_options if scoring_file is None else {}))
         missing = REQUIRED_COLUMNS.difference(df.columns)
         if missing:
             raise ValueError(f"CSV must include: {', '.join(sorted(missing))}")
@@ -195,11 +207,11 @@ def score_leads(
         if df["converted"].nunique() != 2:
             raise ValueError("Training data must contain both converted and non-converted leads.")
 
-        model = make_pipeline(MaxAbsScaler(), StandardScaler(), LogisticRegression(max_iter=1000, **({"class_weight": "balanced"} if balance_classes else {})))
+        model = make_pipeline(MaxAbsScaler(), StandardScaler(), LogisticRegression(max_iter=1000, **({"C": regularization_c} if regularization_c != 1.0 else {}), **({"class_weight": "balanced"} if balance_classes else {})))
         training_features = df[FEATURE_COLUMNS].copy()
         training_labels = df["converted"].astype(int).copy()
         if scoring_file is not None:
-            candidates = _read_csv_input(scoring_file, delimiter, **id_options)
+            candidates = _read_csv_input(scoring_file, delimiter, **({"max_rows": max_rows} if max_rows is not None else {}), **id_options)
             missing = set(FEATURE_COLUMNS).difference(candidates.columns)
             if missing:
                 raise ValueError(f"Scoring CSV must include: {', '.join(sorted(missing))}")
@@ -240,6 +252,7 @@ def score_leads(
             df = df.loc[df["conversion_probability"] >= min_probability].copy()
         if top_n is not None and top_n < len(df):
             df = df.head(top_n).copy()
+        df.attrs["training_population"] = {"samples": len(training_labels), "converted": int(training_labels.sum()), "not_converted": int((training_labels == 0).sum()), "conversion_rate_percent": float(training_labels.mean() * 100)}
         df.attrs["scored_lead_count"] = scored_lead_count
 
         print("\n===== Lead Conversion Scoring =====")
@@ -279,6 +292,8 @@ def export_lead_summary(result, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"lead_count": len(result), "scored_lead_count": int(result.attrs.get("scored_lead_count", len(result))), "priority_counts": {tier: int((result["priority"] == tier).sum()) for tier in ("High", "Medium", "Low")},
                "average_conversion_probability": float(result["conversion_probability"].mean()) if len(result) else None}
+    if "training_population" in result.attrs:
+        payload["training_population"] = result.attrs["training_population"]
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output_path.parent, delete=False) as handle:
@@ -322,7 +337,11 @@ def main(argv=None):
     parser.add_argument("--top-n", type=int, help="Return and export only the N highest-scoring leads, with stable tie order")
     parser.add_argument("--id-column", help="Require unique non-empty scored lead identifiers, preserving literal text and leading zeros")
     parser.add_argument("--min-probability", type=float, help="Export only leads whose predicted conversion percentage meets this inclusive floor")
+    parser.add_argument("--max-input-rows", type=int, help="Reject CSV files exceeding this raw row budget (1..10000000)")
+    parser.add_argument("--regularization-c", type=float, default=1.0, help="Inverse regularization strength (1e-12..1000)")
     args = parser.parse_args(argv)
+    if args.max_input_rows is not None and not 1 <= args.max_input_rows <= 10_000_000:
+        parser.error("--max-input-rows must be from 1 to 10000000")
     delimiter = "\t" if args.delimiter == "tab" else args.delimiter
     try:
         validate_priority_thresholds(args.medium_threshold, args.high_threshold)
@@ -368,6 +387,10 @@ def main(argv=None):
         scoring_options["top_n"] = args.top_n
     if args.balance_classes:
         scoring_options["balance_classes"] = True
+    if args.regularization_c != 1.0:
+        scoring_options["regularization_c"] = args.regularization_c
+    if args.max_input_rows is not None:
+        scoring_options["max_rows"] = args.max_input_rows
     if delimiter != ",":
         scoring_options["delimiter"] = delimiter
     if args.sort_by_probability:
